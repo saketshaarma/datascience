@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Plus, Upload, Search, Pencil, Trash2, Server } from "lucide-react";
+import { Plus, Upload, Search, Pencil, Trash2, Server, Download, Trash } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { InstanceForm } from "@/components/InstanceForm";
 import { CsvUpload } from "@/components/CsvUpload";
-import { getInstances, deleteInstance } from "@/lib/api";
+import { getInstances, deleteInstance, deleteAllInstances, downloadCsv } from "@/lib/api";
 import { toast } from "sonner";
 
 const roleColor = (r) => {
@@ -28,6 +28,7 @@ export default function Inventory() {
   const [csvOpen, setCsvOpen] = useState(false);
   const [editing, setEditing] = useState(null);
   const [toDelete, setToDelete] = useState(null);
+  const [wipeOpen, setWipeOpen] = useState(false);
 
   const load = useCallback(async (q) => {
     setLoading(true);
@@ -50,6 +51,30 @@ export default function Inventory() {
     load(search);
   };
 
+  const confirmWipe = async () => {
+    try {
+      const res = await deleteAllInstances();
+      toast.success(`Deleted ${res.deleted} instances`);
+    } catch (e) {
+      toast.error("Delete failed");
+    }
+    setWipeOpen(false);
+    load(search);
+  };
+
+  const doExport = async () => {
+    if (items.length === 0) {
+      toast.error("Nothing to export");
+      return;
+    }
+    try {
+      await downloadCsv();
+      toast.success("Inventory exported");
+    } catch (e) {
+      toast.error("Export failed");
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -57,6 +82,14 @@ export default function Inventory() {
         subtitle="Central source of truth for infrastructure metadata"
         actions={
           <>
+            <Button
+              data-testid="export-csv-button"
+              variant="outline"
+              onClick={doExport}
+              className="border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm gap-2"
+            >
+              <Download className="h-4 w-4" /> Export
+            </Button>
             <Button
               data-testid="open-csv-upload"
               variant="outline"
@@ -93,6 +126,7 @@ export default function Inventory() {
             <thead>
               <tr className="border-b border-[#27272A] text-left text-[11px] uppercase tracking-wider text-zinc-500">
                 <th className="px-4 py-3 font-medium">Instance</th>
+                <th className="px-4 py-3 font-medium">Env</th>
                 <th className="px-4 py-3 font-medium">Host : Port</th>
                 <th className="px-4 py-3 font-medium">Role</th>
                 <th className="px-4 py-3 font-medium">EC2 Type</th>
@@ -104,10 +138,10 @@ export default function Inventory() {
             </thead>
             <tbody>
               {loading ? (
-                <tr><td colSpan={8} className="px-4 py-10 text-center text-zinc-600">Loading…</td></tr>
+                <tr><td colSpan={9} className="px-4 py-10 text-center text-zinc-600">Loading…</td></tr>
               ) : items.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="px-4 py-16">
+                  <td colSpan={9} className="px-4 py-16">
                     <div className="flex flex-col items-center gap-3 border border-dashed border-white/10 rounded-sm py-10">
                       <Server className="h-8 w-8 text-zinc-700" />
                       <p className="text-zinc-500 text-sm">No instances yet</p>
@@ -119,6 +153,11 @@ export default function Inventory() {
                 items.map((it) => (
                   <tr key={it.id} data-testid={`inventory-row-${it.id}`} className="border-b border-[#27272A]/60 hover:bg-white/5 transition-colors duration-150">
                     <td className="px-4 py-3 text-white font-medium">{it.instance_name || "—"}</td>
+                    <td className="px-4 py-3">
+                      {it.environment ? (
+                        <span className="font-mono text-[11px] text-zinc-400">{it.environment}</span>
+                      ) : <span className="text-zinc-600">—</span>}
+                    </td>
                     <td className="px-4 py-3 font-mono text-zinc-300">
                       {it.host || "—"}{it.port ? <span className="text-zinc-500">:{it.port}</span> : ""}
                     </td>
@@ -157,7 +196,18 @@ export default function Inventory() {
             </tbody>
           </table>
         </div>
-        <p className="text-xs text-zinc-600 font-mono">{items.length} instance(s)</p>
+        <div className="flex items-center justify-between">
+          <p className="text-xs text-zinc-600 font-mono">{items.length} instance(s)</p>
+          {items.length > 0 && (
+            <button
+              data-testid="delete-all-button"
+              onClick={() => setWipeOpen(true)}
+              className="flex items-center gap-1.5 text-xs text-zinc-500 hover:text-red-400 transition-colors duration-150"
+            >
+              <Trash className="h-3.5 w-3.5" /> Delete all
+            </button>
+          )}
+        </div>
       </div>
 
       <InstanceForm open={formOpen} onOpenChange={setFormOpen} instance={editing} onSaved={() => load(search)} />
@@ -174,6 +224,20 @@ export default function Inventory() {
           <AlertDialogFooter>
             <AlertDialogCancel className="border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm">Cancel</AlertDialogCancel>
             <AlertDialogAction data-testid="confirm-delete" onClick={confirmDelete} className="bg-red-500 hover:bg-red-600 text-white rounded-sm">Delete</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog open={wipeOpen} onOpenChange={setWipeOpen}>
+        <AlertDialogContent className="bg-[#18181B] border-[#27272A] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle className="font-head">Delete ALL instances?</AlertDialogTitle>
+            <AlertDialogDescription className="text-zinc-400">
+              This permanently removes every instance and all their DNS/SRV records. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm">Cancel</AlertDialogCancel>
+            <AlertDialogAction data-testid="confirm-delete-all" onClick={confirmWipe} className="bg-red-500 hover:bg-red-600 text-white rounded-sm">Delete everything</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

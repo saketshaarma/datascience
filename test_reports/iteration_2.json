@@ -1,0 +1,39 @@
+{
+  "summary": "Iteration 2 (auth + extended fields + CSV export + delete-all safeguard) fully tested. Backend: 20/20 pytest tests passed - JWT login, /auth/me, admin-only register, self-delete guard, brute-force lockout (429 observed), unauth 401 on /api/instances /stats /terraform, CRUD with all new fields persists (environment, ec2_instance_id, vpc, subnet, AZ, private/public_ip, security_groups[], ebs_volumes[], iam_instance_profile, tags{}, custom_metadata{}), CSV import safeguards (non-.csv 400, >5MB 413), CSV export with all columns & semicolon-joined lists, delete-all requires confirm=DELETE_ALL (400 without), Terraform HCL includes private_ip/availability_zone/iam_instance_profile/vpc_security_group_ids/ebs_block_device/merged Environment+AWS tags+custom metadata, JSON valid. Frontend: Login page redirects to dashboard on success and shows error on wrong creds; protected routes redirect to /login when logged out; Sidebar shows user info + Sign out working; Inventory add-instance dialog exposes all 21 grouped extended fields and creates successfully; Export CSV downloads infra_inventory.csv; Delete-all shows confirm dialog; Team page - admin can add + delete member; Terraform generator with checkboxes generates HCL/JSON. Seed CSV re-imported after cleanup (5 hosts, 54 DNS, 4 SRV).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/login", "issue": "Brute-force lockout is per (client_ip, email). Behind the ingress load-balancer, requests can be distributed across backend replicas so exact 'lockout after 5 attempts' is not guaranteed from a single external caller. Lockout was observed within 8 attempts. Consider keying only by email (or by X-Forwarded-For) so the 5-attempt threshold is honored regardless of replica."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dialogs (Add Instance / Add Team Member)", "issues": ["Radix DialogContent used without a DialogDescription or aria-describedby - accessibility warning in console"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Key brute-force counter by email only (or normalized proxy IP) so 5-attempt lockout is deterministic behind LB",
+    "(Optional) Add DialogDescription/aria-describedby to Add Instance, Add Team Member, Delete confirm dialogs to silence a11y warnings",
+    "server.py still uses deprecated @app.on_event('startup'/'shutdown') - consider FastAPI lifespan handler"
+  ],
+  "critical_code_review_comments": [
+    "server.py still uses deprecated @app.on_event handlers (FastAPI recommends lifespan)",
+    "CORS allow_origins hardcodes 'http://localhost:3000' in addition to FRONTEND_URL - fine for dev but should be documented",
+    "auth.py brute-force key is `ip:email` - with multiple backend replicas or shared proxy IPs the effective count-per-user across replicas is diluted, weakening the intended 5-attempt guard",
+    "terraform_generator._hcl_val (from iter 1) still lacks escaping of quotes/backslashes in string values",
+    "InstanceForm silently swallows the API error detail on save failure (generic 'Save failed') - would be better to surface backend detail as elsewhere"
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (20/20)", "frontend": "100%"},
+  "test_credentials": "admin@infraforge.io / Admin@12345 (seeded admin). Test member ui_test_member@infraforge.io was created and deleted during UI test. test_member@infraforge.io created and deleted in backend tests. Throwaway brute-force email: throwaway_bruteforce@nope.io.",
+  "seed_data_creation": "After tests wiped DB, re-imported /tmp/datatest.csv via API (5 hosts, 54 DNS, 4 SRV) so app has data for follow-up work.",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Run backend tests with `pytest /app/backend/tests/backend_test.py -n 0 -v` (pytest.ini pins xdist workers, -n 0 forces sequential which is required because clean_db autouse session fixture wipes shared state). Admin auto-seeds from ADMIN_EMAIL/ADMIN_PASSWORD env; token via POST /api/auth/login. All /api/instances*, /api/stats, /api/terraform/* require Bearer. Sample CSV lives at /tmp/datatest.csv (5 hosts / 54 DNS / 4 SRV). Frontend stores token in localStorage key 'if_token'."
+}

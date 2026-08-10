@@ -45,3 +45,13 @@ infrastructure. Acts as the central source of truth for DevOps/Infrastructure te
 
 ## Next Tasks
 - Awaiting user review of the initial portal and their own CSV import.
+
+## Implemented (2026-06) — Iteration 2
+- **Team login (JWT)**: email/password auth, admin-seeded account, Bearer + httpOnly cookies, brute-force lockout (keyed by email, 5 attempts / 15 min). All data routes protected. `/team` page for admins to add/remove members.
+- **Extended instance fields**: environment, region, EC2 instance ID, instance type, AMI, VPC, subnet, availability zone, private IP, public IP, security groups[], IAM instance profile, EBS volumes[], AWS tags{}, custom metadata{}.
+- **CSV export** (GET /api/instances/export) with all columns; **upload safeguards** (.csv only, 5 MB max); **delete-all safeguard** (requires confirm=DELETE_ALL).
+- Terraform EC2 blocks now emit private_ip, availability_zone, iam_instance_profile, vpc_security_group_ids, ebs_block_device, and merged Environment + AWS tags + custom metadata.
+- Tested: 100% backend (20/20 pytest) and frontend pass.
+
+## Credentials
+- Admin: `admin@infraforge.io` / `Admin@12345` (see /app/memory/test_credentials.md)

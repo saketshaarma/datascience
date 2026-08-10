@@ -50,20 +50,35 @@ def _build_resources(instances, resources, zone_id, default_ami, default_instanc
         if "ec2" in resources:
             rname = uniq(_slug("ec2", base_slug))
             tags = {"Name": name or host, "Role": role, "Host": host,
+                    "Environment": ins.get("environment", ""),
                     "ManagedBy": "infra-portal"}
-            tags = {k: v for k, v in tags.items() if v}
+            # merge user-defined AWS tags + custom metadata
+            for k, v in (ins.get("tags") or {}).items():
+                tags[k] = v
+            for k, v in (ins.get("custom_metadata") or {}).items():
+                tags[k] = v
+            tags = {k: v for k, v in tags.items() if v not in (None, "")}
             attrs = {
                 "ami": ins.get("ami_id") or default_ami,
                 "instance_type": ins.get("ec2_instance_type") or default_instance_type,
             }
             if ins.get("subnet_id"):
                 attrs["subnet_id"] = ins["subnet_id"]
+            if ins.get("private_ip"):
+                attrs["private_ip"] = ins["private_ip"]
             if ins.get("key_name"):
                 attrs["key_name"] = ins["key_name"]
             if ins.get("availability_zone"):
                 attrs["availability_zone"] = ins["availability_zone"]
+            if ins.get("iam_instance_profile"):
+                attrs["iam_instance_profile"] = ins["iam_instance_profile"]
+            sgs = [s for s in (ins.get("security_groups") or []) if s]
+            if sgs:
+                attrs["vpc_security_group_ids"] = sgs
+            ebs = [v for v in (ins.get("ebs_volumes") or []) if v.get("device_name")]
             blocks.append({"type": "aws_instance", "name": rname,
-                           "attrs": attrs, "tags": tags})
+                           "attrs": attrs, "tags": tags, "ebs": ebs})
+
 
         # Security group from port
         if "sg" in resources and port:
@@ -141,6 +156,13 @@ def _to_hcl(blocks):
             cidrs = json.dumps(ing["cidr_blocks"])
             lines.append(f'    cidr_blocks = {cidrs}')
             lines.append("  }")
+        for vol in b.get("ebs", []):
+            lines.append("  ebs_block_device {")
+            lines.append(f'    device_name = "{_esc(vol.get("device_name",""))}"')
+            if vol.get("size_gb"):
+                lines.append(f'    volume_size = {int(vol["size_gb"])}')
+            lines.append(f'    volume_type = "{_esc(vol.get("volume_type") or "gp3")}"')
+            lines.append("  }")
         if b.get("tags"):
             lines.append(_hcl_tags(b["tags"]))
         lines.append("}")
@@ -167,6 +189,13 @@ def _to_tf_json(blocks):
             body["vpc_id"] = b["vpc_id"]
         if b.get("ingress"):
             body["ingress"] = b["ingress"]
+        if b.get("ebs"):
+            body["ebs_block_device"] = [
+                {"device_name": v.get("device_name", ""),
+                 "volume_size": int(v["size_gb"]) if v.get("size_gb") else None,
+                 "volume_type": v.get("volume_type") or "gp3"}
+                for v in b["ebs"]
+            ]
         if b.get("tags"):
             body["tags"] = b["tags"]
         resource.setdefault(rtype, {})[b["name"]] = body
