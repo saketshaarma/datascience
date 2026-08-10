@@ -1,0 +1,195 @@
+"""Generate Terraform HCL and Terraform JSON from inventory instances."""
+import json
+import re
+
+
+def _slug(*parts):
+    raw = "_".join(str(p) for p in parts if p)
+    raw = re.sub(r"[^a-zA-Z0-9]+", "_", raw).strip("_").lower()
+    if not raw:
+        raw = "resource"
+    if raw[0].isdigit():
+        raw = "r_" + raw
+    return raw
+
+
+def _esc(v):
+    return str(v).replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _hcl_tags(tags: dict, indent="    "):
+    lines = ["  tags = {"]
+    for k, v in tags.items():
+        lines.append(f'    {k} = "{_esc(v)}"')
+    lines.append("  }")
+    return "\n".join(lines)
+
+
+def _build_resources(instances, resources, zone_id, default_ami, default_instance_type):
+    """Return dict-of-lists describing every terraform resource block."""
+    blocks = []  # each: {"type":..., "name":..., "attrs": {...}, "raw_tags": {...}}
+    used_names = set()
+
+    def uniq(name):
+        base = name
+        i = 1
+        while name in used_names:
+            i += 1
+            name = f"{base}_{i}"
+        used_names.add(name)
+        return name
+
+    for ins in instances:
+        host = ins.get("host") or ""
+        name = ins.get("instance_name") or "instance"
+        role = ins.get("instance_role") or ""
+        port = ins.get("port")
+        base_slug = _slug(name, host.replace(".", "_"))
+
+        # EC2
+        if "ec2" in resources:
+            rname = uniq(_slug("ec2", base_slug))
+            tags = {"Name": name or host, "Role": role, "Host": host,
+                    "ManagedBy": "infra-portal"}
+            tags = {k: v for k, v in tags.items() if v}
+            attrs = {
+                "ami": ins.get("ami_id") or default_ami,
+                "instance_type": ins.get("ec2_instance_type") or default_instance_type,
+            }
+            if ins.get("subnet_id"):
+                attrs["subnet_id"] = ins["subnet_id"]
+            if ins.get("key_name"):
+                attrs["key_name"] = ins["key_name"]
+            if ins.get("availability_zone"):
+                attrs["availability_zone"] = ins["availability_zone"]
+            blocks.append({"type": "aws_instance", "name": rname,
+                           "attrs": attrs, "tags": tags})
+
+        # Security group from port
+        if "sg" in resources and port:
+            rname = uniq(_slug("sg", base_slug))
+            blocks.append({
+                "type": "aws_security_group", "name": rname,
+                "attrs": {
+                    "name": f"{base_slug}_sg",
+                    "description": f"Security group for {name or host} port {port}",
+                },
+                "vpc_id": ins.get("vpc_id") or None,
+                "ingress": [{"from_port": port, "to_port": port,
+                             "protocol": "tcp", "cidr_blocks": ["10.0.0.0/8"]}],
+                "tags": {"Name": f"{base_slug}_sg", "ManagedBy": "infra-portal"},
+            })
+
+        # Route53 DNS (A records)
+        if "dns" in resources:
+            for dns in ins.get("dns_records", []):
+                dns = dns.strip()
+                if not dns:
+                    continue
+                rname = uniq(_slug("dns", dns.replace(".", "_")))
+                blocks.append({
+                    "type": "aws_route53_record", "name": rname,
+                    "attrs": {
+                        "zone_id": zone_id,
+                        "name": dns,
+                        "type": "A",
+                        "ttl": 300,
+                        "records": [host] if host else ["0.0.0.0"],
+                    },
+                })
+
+        # Route53 SRV records
+        if "srv" in resources:
+            for srv in ins.get("srv_records", []):
+                srv = srv.strip()
+                if not srv:
+                    continue
+                rname = uniq(_slug("srv", srv.replace(".", "_")))
+                target = srv if srv.endswith(".") else srv + "."
+                srv_value = f"0 5 {port or 3306} {target}"
+                blocks.append({
+                    "type": "aws_route53_record", "name": rname,
+                    "attrs": {
+                        "zone_id": zone_id,
+                        "name": f"_service._tcp.{srv}",
+                        "type": "SRV",
+                        "ttl": 300,
+                        "records": [srv_value],
+                    },
+                })
+
+    return blocks
+
+
+def _to_hcl(blocks):
+    out = []
+    out.append('terraform {\n  required_providers {\n    aws = {\n      source  = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n')
+    out.append('provider "aws" {\n  region = var.aws_region\n}\n')
+    out.append('variable "aws_region" {\n  type    = string\n  default = "us-east-1"\n}\n')
+
+    for b in blocks:
+        lines = [f'resource "{b["type"]}" "{b["name"]}" {{']
+        for k, v in b["attrs"].items():
+            lines.append(f"  {_hcl_val(k, v)}")
+        if b.get("vpc_id"):
+            lines.append(f'  vpc_id = "{_esc(b["vpc_id"])}"')
+        for ing in b.get("ingress", []):
+            lines.append("  ingress {")
+            lines.append(f'    from_port   = {ing["from_port"]}')
+            lines.append(f'    to_port     = {ing["to_port"]}')
+            lines.append(f'    protocol    = "{ing["protocol"]}"')
+            cidrs = json.dumps(ing["cidr_blocks"])
+            lines.append(f'    cidr_blocks = {cidrs}')
+            lines.append("  }")
+        if b.get("tags"):
+            lines.append(_hcl_tags(b["tags"]))
+        lines.append("}")
+        out.append("\n".join(lines) + "\n")
+    return "\n".join(out)
+
+
+def _hcl_val(key, v):
+    if isinstance(v, bool):
+        return f"{key} = {str(v).lower()}"
+    if isinstance(v, int):
+        return f"{key} = {v}"
+    if isinstance(v, list):
+        return f"{key} = {json.dumps(v)}"
+    return f'{key} = "{_esc(v)}"'
+
+
+def _to_tf_json(blocks):
+    resource = {}
+    for b in blocks:
+        rtype = b["type"]
+        body = dict(b["attrs"])
+        if b.get("vpc_id"):
+            body["vpc_id"] = b["vpc_id"]
+        if b.get("ingress"):
+            body["ingress"] = b["ingress"]
+        if b.get("tags"):
+            body["tags"] = b["tags"]
+        resource.setdefault(rtype, {})[b["name"]] = body
+    doc = {
+        "terraform": {
+            "required_providers": {
+                "aws": {"source": "hashicorp/aws", "version": "~> 5.0"}
+            }
+        },
+        "provider": {"aws": {"region": "${var.aws_region}"}},
+        "variable": {"aws_region": {"type": "string", "default": "us-east-1"}},
+        "resource": resource,
+    }
+    return json.dumps(doc, indent=2)
+
+
+def generate_terraform(instances, resources, output_format, zone_id,
+                       default_ami, default_instance_type):
+    blocks = _build_resources(instances, resources, zone_id,
+                              default_ami, default_instance_type)
+    result = {"resource_count": len(blocks)}
+    if output_format in ("hcl", "both"):
+        result["hcl"] = _to_hcl(blocks)
+    if output_format in ("json", "both"):
+        result["json"] = _to_tf_json(blocks)
+    return result

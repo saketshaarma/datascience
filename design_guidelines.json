@@ -1,0 +1,98 @@
+{
+  "theme": {
+    "mode": "dark",
+    "archetype": "The Performance Pro / Swiss High-Contrast (Adapted for DevOps)",
+    "description": "A 'Command-Center' focus. High-visibility tactical look designed for internal infrastructure management. Pure function, high data density, no distracting gradients."
+  },
+  "colors": {
+    "background": "#09090B",
+    "surface": "#18181B",
+    "border": "#27272A",
+    "primary_text": "#FAFAFA",
+    "secondary_text": "#A1A1AA",
+    "accent": {
+      "color": "#F97316",
+      "name": "Signal Orange",
+      "usage": "AWS-inspired accent color for Primary CTAs (e.g., 'Generate Terraform', 'Upload CSV') and active states."
+    },
+    "status": {
+      "success": "#22C55E",
+      "error": "#EF4444",
+      "warning": "#EAB308",
+      "info": "#3B82F6"
+    }
+  },
+  "typography": {
+    "headings": {
+      "family": "IBM Plex Sans",
+      "weights": ["600", "700"],
+      "usage": "Page titles, widget headers. Must be tracked tightly (-0.02em)."
+    },
+    "body": {
+      "family": "Inter",
+      "weights": ["400", "500"],
+      "usage": "Standard UI text, form labels, descriptions."
+    },
+    "monospace": {
+      "family": "JetBrains Mono",
+      "weights": ["400"],
+      "usage": "IP addresses, Ports, DNS records, and Terraform HCL/JSON code blocks. CRITICAL for data tables."
+    }
+  },
+  "spacing_and_layout": {
+    "strategy": "Mode B: High Density Grid",
+    "grid": "Tight gaps (gap-4 or gap-6) for dashboards. Use col-span-1 for summary metric widgets, col-span-3 for larger tables.",
+    "borders_and_radius": "Sharp, technical edges. Max 4px border-radius (rounded-sm). Use 1px solid strokes (border-white/10) instead of soft shadows.",
+    "surfaces": "Flat solid surfaces. NO Glassmorphism. Avoid visual refraction for data-heavy apps. Use #18181B for cards."
+  },
+  "navigation": {
+    "pattern": "Vertical Sidebar (Left) + Top Header (Breadcrumbs/Actions)",
+    "sidebar": "Fixed left, solid background (#09090B), right border (border-white/10). Contains navigation links (Dashboard, Inventory, DNS/SRV, Generator).",
+    "header": "Sticky top, solid background (#09090B), bottom border. Contains global actions (e.g., Bulk Upload CSV button, Search)."
+  },
+  "components": {
+    "data_tables": "Dense layout. Use monospaced font for technical columns (IP, Port, Instance ID). Include hover states (bg-white/5) on rows.",
+    "forms": "Use Shadcn Inputs and Selects. Left-aligned labels. Ring color on focus must be ring-orange-500/50.",
+    "code_editor_view": "For Terraform Generator: Darker background block (#000000 or #09090B inner box) with JetBrains Mono, syntax highlighting colors (e.g., green for strings, orange for keywords), and a 'Copy to Clipboard' absolute button in top right.",
+    "buttons": "Rectangular (rounded-sm). Primary: bg-orange-500 text-white hover:bg-orange-600. Secondary: bg-transparent border border-white/20 hover:bg-white/10."
+  },
+  "visual_enhancers": {
+    "icons": "lucide-react for standard UI icons. Keep stroke width to 1.5 or 2 for clarity.",
+    "textures": "Grid Borders: Make the grid visible on the dashboard using border-collapse or subtle dividers to expose the skeleton of the UI.",
+    "empty_states": "Use subtle dashed borders (border-dashed border-white/20) with muted text to indicate where data should be (e.g., 'No DNS records found.')."
+  },
+  "image_urls": [
+    {
+      "category": "empty_state_background",
+      "url": "https://images.unsplash.com/photo-1566410824233-a8011929225c?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2Mzl8MHwxfHNlYXJjaHwxfHxzZXJ2ZXIlMjBhYnN0cmFjdCUyMGRhcmt8ZW58MHx8fHwxNzgyOTIyMjQxfDA&ixlib=rb-4.1.0&q=85",
+      "description": "Abstract dark background texture, can be used at very low opacity (e.g., 5%) for empty state banners or login screens if needed."
+    }
+  ],
+  "accessibility": {
+    "contrast": "Ensure primary orange (#F97316) meets 4.5:1 ratio against #09090B. Use text-white for text inside primary buttons.",
+    "focus": "All interactive elements must have visible focus rings.",
+    "motion": "Respect prefers-reduced-motion. Keep animations purely functional (fast transitions 150ms)."
+  },
+  "instructions_to_main_agent": [
+    "Prioritize data clarity and density. This is an internal tool for DevOps, so it should feel like a modern, polished IDE or terminal.",
+    "Install and use `lucide-react` for icons.",
+    "Use `recharts` for the Stats Overview (Instance Role breakdown, etc).",
+    "For the Terraform Generator view, output the generated text inside a `<pre><code>` block with `JetBrains Mono` font. Include a functional 'Copy HCL' / 'Copy JSON' button.",
+    "Ensure the CSV Bulk Upload has a clear drag-and-drop zone with a dashed border.",
+    "DO NOT use Inter or generic fonts for the Terraform output; monospaced font is mandatory for that section.",
+    "Ensure all interactive elements include `data-testid` attributes (e.g., `data-testid=\"generate-tf-button\"`).",
+    "Remove `.App-logo` and generic centered text from `App.css`. Left-align forms and data.",
+    "Force dark mode by adding the 'dark' class to the HTML/body or root element by default."
+  ],
+  "universal_guidelines": [
+    "You tend to converge toward generic outputs. Avoid this: make creative, distinctive frontends that surprise and delight.",
+    "Dark colors look good when used independently without gradients. DO NOT use dark colors as gradients.",
+    "Create depth through layered design elements with z-index hierarchy and 1px borders.",
+    "You MUST NOT apply universal transition (e.g., `transition: all`). Add transitions for specific interactive elements.",
+    "You MUST NOT center align the app container. Left-align for natural reading flow.",
+    "Always use modern button styles (rounded-sm) with interaction animations.",
+    "NEVER use AI assistant Emoji characters (🤖🧠💡) for icons.",
+    "Every interaction needs micro-animations - hover states, transitions.",
+    "Use sonner for toast notifications."
+  ]
+}
