@@ -3,6 +3,11 @@ import json
 import re
 
 
+class Raw(str):
+    """A string that renders as an unquoted HCL reference / a ${...} JSON interpolation."""
+    pass
+
+
 def _slug(*parts):
     raw = "_".join(str(p) for p in parts if p)
     raw = re.sub(r"[^a-zA-Z0-9]+", "_", raw).strip("_").lower()
@@ -25,9 +30,16 @@ def _hcl_tags(tags: dict, indent="    "):
     return "\n".join(lines)
 
 
-def _build_resources(instances, resources, zone_id, default_ami, default_instance_type):
-    """Return dict-of-lists describing every terraform resource block."""
-    blocks = []  # each: {"type":..., "name":..., "attrs": {...}, "raw_tags": {...}}
+def _build_resources(instances, resources, zone_id, default_ami, default_instance_type,
+                     dns_target="instance_private"):
+    """Return dict-of-lists describing every terraform resource block.
+
+    dns_target: how DNS A records resolve —
+      'instance_private' -> reference the created aws_instance.private_ip
+      'instance_public'  -> reference the created aws_instance.public_ip
+      'host'             -> literal host IP from inventory
+    """
+    blocks = []
     used_names = set()
 
     def uniq(name):
@@ -45,10 +57,11 @@ def _build_resources(instances, resources, zone_id, default_ami, default_instanc
         role = ins.get("instance_role") or ""
         port = ins.get("port")
         base_slug = _slug(name, host.replace(".", "_"))
+        ec2_rname = None  # set when an EC2 resource is generated for this instance
 
-        # EC2
+        # EC2 — new instance is provisioned FROM this base instance's AMI
         if "ec2" in resources:
-            rname = uniq(_slug("ec2", base_slug))
+            ec2_rname = uniq(_slug("ec2", base_slug))
             tags = {"Name": name or host, "Role": role, "Host": host,
                     "Environment": ins.get("environment", ""),
                     "ManagedBy": "infra-portal"}
@@ -64,8 +77,6 @@ def _build_resources(instances, resources, zone_id, default_ami, default_instanc
             }
             if ins.get("subnet_id"):
                 attrs["subnet_id"] = ins["subnet_id"]
-            if ins.get("private_ip"):
-                attrs["private_ip"] = ins["private_ip"]
             if ins.get("key_name"):
                 attrs["key_name"] = ins["key_name"]
             if ins.get("availability_zone"):
@@ -76,9 +87,8 @@ def _build_resources(instances, resources, zone_id, default_ami, default_instanc
             if sgs:
                 attrs["vpc_security_group_ids"] = sgs
             ebs = [v for v in (ins.get("ebs_volumes") or []) if v.get("device_name")]
-            blocks.append({"type": "aws_instance", "name": rname,
+            blocks.append({"type": "aws_instance", "name": ec2_rname,
                            "attrs": attrs, "tags": tags, "ebs": ebs})
-
 
         # Security group from port
         if "sg" in resources and port:
@@ -95,8 +105,13 @@ def _build_resources(instances, resources, zone_id, default_ami, default_instanc
                 "tags": {"Name": f"{base_slug}_sg", "ManagedBy": "infra-portal"},
             })
 
-        # Route53 DNS (A records)
+        # Route53 DNS (A records) — map to the CREATED instance, not the host IP
         if "dns" in resources:
+            if dns_target in ("instance_private", "instance_public") and ec2_rname:
+                attr = "private_ip" if dns_target == "instance_private" else "public_ip"
+                record_val = [Raw(f"aws_instance.{ec2_rname}.{attr}")]
+            else:
+                record_val = [host] if host else ["0.0.0.0"]
             for dns in ins.get("dns_records", []):
                 dns = dns.strip()
                 if not dns:
@@ -109,7 +124,7 @@ def _build_resources(instances, resources, zone_id, default_ami, default_instanc
                         "name": dns,
                         "type": "A",
                         "ttl": 300,
-                        "records": [host] if host else ["0.0.0.0"],
+                        "records": list(record_val),
                     },
                 })
 
@@ -170,14 +185,39 @@ def _to_hcl(blocks):
     return "\n".join(out)
 
 
+def _hcl_list(v):
+    parts = []
+    for x in v:
+        if isinstance(x, Raw):
+            parts.append(str(x))
+        elif isinstance(x, (int, float)) and not isinstance(x, bool):
+            parts.append(str(x))
+        else:
+            parts.append(f'"{_esc(x)}"')
+    return "[" + ", ".join(parts) + "]"
+
+
 def _hcl_val(key, v):
+    if isinstance(v, Raw):
+        return f"{key} = {v}"
     if isinstance(v, bool):
         return f"{key} = {str(v).lower()}"
     if isinstance(v, int):
         return f"{key} = {v}"
     if isinstance(v, list):
-        return f"{key} = {json.dumps(v)}"
+        return f"{key} = {_hcl_list(v)}"
     return f'{key} = "{_esc(v)}"'
+
+
+def _jsonify(obj):
+    """Convert Raw references to ${...} interpolation strings recursively."""
+    if isinstance(obj, Raw):
+        return "${" + str(obj) + "}"
+    if isinstance(obj, dict):
+        return {k: _jsonify(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_jsonify(x) for x in obj]
+    return obj
 
 
 def _to_tf_json(blocks):
@@ -198,7 +238,7 @@ def _to_tf_json(blocks):
             ]
         if b.get("tags"):
             body["tags"] = b["tags"]
-        resource.setdefault(rtype, {})[b["name"]] = body
+        resource.setdefault(rtype, {})[b["name"]] = _jsonify(body)
     doc = {
         "terraform": {
             "required_providers": {
@@ -213,9 +253,10 @@ def _to_tf_json(blocks):
 
 
 def generate_terraform(instances, resources, output_format, zone_id,
-                       default_ami, default_instance_type):
+                       default_ami, default_instance_type,
+                       dns_target="instance_private"):
     blocks = _build_resources(instances, resources, zone_id,
-                              default_ami, default_instance_type)
+                              default_ami, default_instance_type, dns_target)
     result = {"resource_count": len(blocks)}
     if output_format in ("hcl", "both"):
         result["hcl"] = _to_hcl(blocks)

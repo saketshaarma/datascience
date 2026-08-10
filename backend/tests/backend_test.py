@@ -253,3 +253,103 @@ class TestTerraform:
         parsed = json.loads(d["json"])
         assert "resource" in parsed
         admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+
+
+# ----------------- Terraform DNS target (Iteration 3) -----------------
+class TestTerraformDnsTarget:
+    """Iteration 3: DNS A records must reference the CREATED aws_instance IP,
+    not the static host IP, unless dns_target=host or ec2 not in resources."""
+
+    @pytest.fixture(scope="class", autouse=True)
+    def seed(self, admin_client):
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+        r = admin_client.post(f"{API}/instances", json={
+            "instance_name": "jalsi", "host": "172.10.112.169", "port": 3306,
+            "instance_role": "master", "ec2_instance_type": "t3.medium",
+            "ami_id": "ami-baseXYZ", "dns_records": ["db.example.com"],
+            "srv_records": ["_mysql._tcp.example.com"],
+        })
+        assert r.status_code == 200, r.text
+        yield
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+
+    def _gen(self, admin_client, **overrides):
+        payload = {
+            "resources": ["ec2", "dns", "srv", "sg"],
+            "output_format": "both",
+            "dns_target": "instance_private",
+        }
+        payload.update(overrides)
+        r = admin_client.post(f"{API}/terraform/generate", json=payload)
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    def test_ami_from_inventory(self, admin_client):
+        d = self._gen(admin_client)
+        # base instance's AMI is propagated
+        assert 'ami = "ami-baseXYZ"' in d["hcl"]
+
+    def test_dns_target_instance_private(self, admin_client):
+        d = self._gen(admin_client, dns_target="instance_private")
+        hcl = d["hcl"]
+        # Unquoted reference in HCL
+        assert "records = [aws_instance.ec2_jalsi_172_10_112_169.private_ip]" in hcl
+        assert '"172.10.112.169"' not in hcl.split("aws_route53_record")[1].split("}")[0] if "aws_route53_record" in hcl else True
+        # ${...} in JSON
+        parsed = json.loads(d["json"])
+        rec = list(parsed["resource"]["aws_route53_record"].values())[0]
+        assert rec["records"] == ["${aws_instance.ec2_jalsi_172_10_112_169.private_ip}"]
+        assert rec["type"] == "A"
+
+    def test_dns_target_instance_public(self, admin_client):
+        d = self._gen(admin_client, dns_target="instance_public")
+        assert "records = [aws_instance.ec2_jalsi_172_10_112_169.public_ip]" in d["hcl"]
+        parsed = json.loads(d["json"])
+        rec = list(parsed["resource"]["aws_route53_record"].values())[0]
+        assert rec["records"] == ["${aws_instance.ec2_jalsi_172_10_112_169.public_ip}"]
+
+    def test_dns_target_host(self, admin_client):
+        d = self._gen(admin_client, dns_target="host")
+        assert 'records = ["172.10.112.169"]' in d["hcl"]
+        parsed = json.loads(d["json"])
+        rec = list(parsed["resource"]["aws_route53_record"].values())[0]
+        assert rec["records"] == ["172.10.112.169"]
+
+    def test_dns_fallback_when_no_ec2(self, admin_client):
+        # dns_target=instance_private BUT ec2 not requested -> must fall back to literal host
+        d = self._gen(admin_client, resources=["dns", "srv"], dns_target="instance_private")
+        assert 'records = ["172.10.112.169"]' in d["hcl"]
+        parsed = json.loads(d["json"])
+        rec = list(parsed["resource"]["aws_route53_record"].values())[0]
+        assert rec["records"] == ["172.10.112.169"]
+        # no ec2 was generated
+        assert "aws_instance" not in parsed["resource"]
+
+    def test_srv_still_literal(self, admin_client):
+        d = self._gen(admin_client)
+        parsed = json.loads(d["json"])
+        srv = [v for k, v in parsed["resource"]["aws_route53_record"].items() if v["type"] == "SRV"]
+        assert len(srv) == 1
+        # SRV value is a literal string (no interpolation)
+        assert srv[0]["records"][0].startswith("0 5 3306 ")
+        assert "aws_instance" not in srv[0]["records"][0]
+
+    def test_sg_still_from_port(self, admin_client):
+        d = self._gen(admin_client)
+        parsed = json.loads(d["json"])
+        sg = list(parsed["resource"]["aws_security_group"].values())[0]
+        assert sg["ingress"][0]["from_port"] == 3306
+        assert sg["ingress"][0]["to_port"] == 3306
+
+    def test_json_only_all_instances(self, admin_client):
+        # instance_ids null -> all instances; output_format=json -> valid TF JSON doc
+        d = self._gen(admin_client, instance_ids=None, output_format="json")
+        assert "hcl" not in d or d.get("hcl") is None
+        assert d["json"]
+        parsed = json.loads(d["json"])
+        assert "terraform" in parsed
+        assert "provider" in parsed
+        assert "resource" in parsed
+        assert "aws_instance" in parsed["resource"]
+        assert "aws_route53_record" in parsed["resource"]
+        assert "aws_security_group" in parsed["resource"]

@@ -55,3 +55,9 @@ infrastructure. Acts as the central source of truth for DevOps/Infrastructure te
 
 ## Credentials
 - Admin: `admin@infraforge.io` / `Admin@12345` (see /app/memory/test_credentials.md)
+
+## Implemented (2026-06) — Iteration 3
+- **Base-instance semantics**: each Host_Port row is a base instance whose **AMI drives creation** of a new EC2 instance (`aws_instance.ami = inventory ami_id`).
+- **DNS maps to created instance**: Route53 A records now reference the created instance's IP (`aws_instance.<name>.private_ip` / `.public_ip`) instead of the static host IP. Configurable via a "DNS maps to" selector (private / public / host literal). Falls back to literal host IP when EC2 isn't in the selected resources.
+- **Export all as JSON**: one-click button generates Terraform JSON for the entire inventory (all resources) and downloads `main.tf.json`.
+- Added `Raw` reference type in the generator (unquoted in HCL, `${...}` in JSON). Tested: 28/28 backend, 100% frontend.

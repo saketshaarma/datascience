@@ -90,6 +90,7 @@ class TerraformRequest(BaseModel):
     instance_ids: Optional[List[str]] = None
     resources: List[str] = Field(default_factory=lambda: ["ec2", "dns", "srv", "sg"])
     output_format: Literal["hcl", "json", "both"] = "both"
+    dns_target: Literal["instance_private", "instance_public", "host"] = "instance_private"
     zone_id: str = "REPLACE_WITH_ZONE_ID"
     default_ami: str = "ami-0c55b159cbfafe1f0"
     default_instance_type: str = "t3.medium"
@@ -320,7 +321,7 @@ async def terraform_generate(req: TerraformRequest):
     return generate_terraform(
         docs, resources=req.resources, output_format=req.output_format,
         zone_id=req.zone_id, default_ami=req.default_ami,
-        default_instance_type=req.default_instance_type,
+        default_instance_type=req.default_instance_type, dns_target=req.dns_target,
     )
 
 

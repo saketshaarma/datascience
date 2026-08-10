@@ -1,9 +1,12 @@
 import { useEffect, useState } from "react";
-import { FileCode2, Cpu, Globe, Network, Shield, Zap } from "lucide-react";
+import { FileCode2, Cpu, Globe, Network, Shield, Zap, FileJson } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageHeader } from "@/components/PageHeader";
 import { CodeBlock } from "@/components/CodeBlock";
@@ -27,8 +30,11 @@ export default function Generator() {
   const [zoneId, setZoneId] = useState("Z1234567890ABC");
   const [defaultAmi, setDefaultAmi] = useState("ami-0c55b159cbfafe1f0");
   const [defaultType, setDefaultType] = useState("t3.medium");
+  const [dnsTarget, setDnsTarget] = useState("instance_private");
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [activeTab, setActiveTab] = useState("hcl");
 
   useEffect(() => {
     getInstances().then(setInstances).catch(() => {});
@@ -55,16 +61,47 @@ export default function Generator() {
         instance_ids: selected.size ? Array.from(selected) : null,
         resources: Array.from(resources),
         output_format: "both",
+        dns_target: dnsTarget,
         zone_id: zoneId,
         default_ami: defaultAmi,
         default_instance_type: defaultType,
       });
       setResult(res);
+      setActiveTab("hcl");
       toast.success(`Generated ${res.resource_count} resources`);
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Generation failed");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const exportAllJson = async () => {
+    setExporting(true);
+    try {
+      const res = await generateTerraform({
+        instance_ids: null,
+        resources: ["ec2", "dns", "srv", "sg"],
+        output_format: "json",
+        dns_target: dnsTarget,
+        zone_id: zoneId,
+        default_ami: defaultAmi,
+        default_instance_type: defaultType,
+      });
+      const blob = new Blob([res.json || ""], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "main.tf.json";
+      a.click();
+      URL.revokeObjectURL(url);
+      setResult(res);
+      setActiveTab("json");
+      toast.success(`Exported ${res.resource_count} resources as JSON`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Export failed");
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -106,6 +143,22 @@ export default function Generator() {
               <div className="space-y-1.5">
                 <Label className="text-xs text-zinc-400">Default Instance Type</Label>
                 <Input data-testid="default-type" value={defaultType} onChange={(e) => setDefaultType(e.target.value)} className={inputCls} />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-zinc-400">DNS maps to</Label>
+                <Select value={dnsTarget} onValueChange={setDnsTarget}>
+                  <SelectTrigger data-testid="dns-target" className={inputCls}>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent className="bg-[#18181B] border-[#27272A] text-white">
+                    <SelectItem value="instance_private">Created instance · private IP</SelectItem>
+                    <SelectItem value="instance_public">Created instance · public IP</SelectItem>
+                    <SelectItem value="host">Host IP (literal)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <p className="text-[10px] text-zinc-600 font-mono">
+                  A records reference the new EC2 instance's IP.
+                </p>
               </div>
             </div>
           </Panel>
@@ -149,6 +202,16 @@ export default function Generator() {
           >
             <Zap className="h-4 w-4" /> {busy ? "Generating…" : "Generate Terraform"}
           </Button>
+
+          <Button
+            data-testid="export-all-json-button"
+            onClick={exportAllJson}
+            disabled={exporting}
+            variant="outline"
+            className="w-full border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm gap-2 h-11"
+          >
+            <FileJson className="h-4 w-4" /> {exporting ? "Exporting…" : "Export all inventory as JSON"}
+          </Button>
         </div>
 
         {/* Output panel */}
@@ -158,7 +221,7 @@ export default function Generator() {
               <div className="text-xs text-zinc-500 font-mono">
                 {result.resource_count} terraform resources generated
               </div>
-              <Tabs defaultValue="hcl">
+              <Tabs value={activeTab} onValueChange={setActiveTab}>
                 <TabsList className="bg-[#18181B] border border-[#27272A] rounded-sm">
                   <TabsTrigger value="hcl" data-testid="tab-hcl" className="data-[state=active]:bg-orange-500 data-[state=active]:text-white rounded-sm">
                     main.tf (HCL)
