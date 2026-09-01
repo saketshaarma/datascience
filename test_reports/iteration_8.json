@@ -1,0 +1,33 @@
+{
+  "summary": "End-to-end testing of the AWS Discovery Dashboard feature (backend + frontend). 14/14 pytest cases pass for /api/aws/tag-options, /api/aws/discover, /api/aws/settings (admin-only 403 for members, masked key, blank keeps prev, live mode returns 502 with fake creds). Frontend Discovery Dashboard renders DEMO badge, all 6 stat cards (total=64, ec2=5, ebs=0, sg=5, route53=54, rds=0 - matches inventory-derived counts), by-source pie, discovery-table with 64 rows, tag key/value selects + Discover button. Team page AwsSettingsCard saves and displays masked key (••••WXYZ) + 'configured' badge. Regression: login, inventory, db-config, kubernetes pages load without console errors.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Dashboard discover control bar", "issues": ["Tag value select uses aria-disabled but Radix Select does not render data-disabled/aria-disabled attr on trigger visibly (the visual 'opacity-40' disabled state is applied via className only). Functionality works (select does not open when key is __all__) but automated a11y disabled state check via attribute is unreliable."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_aws_discovery.py",
+    "/app/test_reports/pytest/aws_discovery.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "aws_discovery.py _discover_live_sync uses arn.split(':')[5] which for ARNs like arn:aws:rds:region:acct:db:mydb has resource type 'db' which is correctly mapped, but for arn:aws:ec2:region:acct:instance/i-... rtype resolves to 'instance' (works). Edge case: some ARNs use ':' as separator (e.g., cluster/subnet arns), but ResourceTypeFilters limits to 4 types so this is fine.",
+    "Dashboard.jsx run() effect calls run('__all__','__all__') on mount and also loadTags() - two initial requests; consider Promise.all or a single combined endpoint later. Not blocking.",
+    "AwsSettingsCard: after save, form.access_key_id/secret are cleared and re-fetch happens; this is correct. Minor: no client-side validation for empty access_key_id on first setup (backend also accepts it but 'configured' stays false).",
+    "aws_discovery.py: bare `except Exception` in live branch catches everything (including HTTPException) and returns 502 which is acceptable, but hides the real reason (masked to type name only) - fine for demo, but consider logging server-side.",
+    "aws_settings collection uses _id='aws' singleton pattern; consider adding an updated_by field for audit."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_aws_discovery.py"
+  ],
+  "success_rate": {"backend": "100% (14/14)", "frontend": "100%"},
+  "test_credentials": "admin@infraforge.io / Admin@12345 (localStorage: if_token). TEST_member_<ts>@infraforge.io / Member@12345 was created and deleted during pytest run.",
+  "seed_data_creation": "None persistent. pytest created and cleaned up one TEST_member_* user. After all tests, aws_settings collection was cleared (empty, 'not configured') so demo mode continues with default region us-east-1 and DEMO account id.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "All /api/aws routes require Bearer; settings routes require admin. Discover payload: {} for all, {tag_key,'tag_value'} to filter. Demo mode currently returns 64 resources from inventory (5 EC2 + 5 SG + 54 Route53). Only tag key present in seeded data is 'Role' (all values 'slave'). Selectors: discover-tag-key, discover-tag-value, discover-run, stat-total, stat-ec2_instance, stat-ebs_volume, stat-security_group, stat-route53_record, stat-rds_instance, discovery-table (table itself), aws-settings-card, aws-access-key, aws-secret-key, aws-region, aws-use-live, aws-save-settings. Use REACT_APP_BACKEND_URL=https://aws-inventory-hub.preview.emergentagent.com when running pytest.",
+  "rca of the issue": "N/A - no issues found."
+}

@@ -85,3 +85,8 @@ infrastructure. Acts as the central source of truth for DevOps/Infrastructure te
 ## Implemented (2026-06) — Iteration 7 & 8
 - **Kubernetes page redesigned as a 4-step wizard** (Cluster → Tags → Nodes → Review) with a progress stepper, framer-motion transitions, key-value tag editors, node cards with controller/etcd/worker presets, and a review summary. Tested 100% frontend.
 - **Modular Terraform output**: the K8s generator now emits a full project instead of a flat file — `provider.tf`, `variables.tf`, `main.tf` (data sources + `for_each` over `var.nodes` + `templatefile` userdata), `outputs.tf`, `terraform.tfvars.json` (all values incl. cluster_name/ami/tags/nodes), and `userdata.sh.tpl` — plus the `cluster.json` spec. Wizard shows each file in its own tab with copy/download and a "Download all" action.
+
+## Implemented (2026-06) — Iteration 9
+- **Discovery Dashboard**: aggregates every resource across Inventory + DB Config + Kubernetes into a unified AWS discovery view (EC2, EBS, security groups, Route53, RDS/DB), filterable by a selectable tag key + value; summary cards, by-source pie, resource table, DEMO/LIVE mode badge.
+- **AWS connection settings** (admin, Team page): access key / secret / region + live-mode toggle (off = demo/mock, on = boto3 Resource Groups Tagging API). Secret write-only, returned masked.
+- Backend: `aws_discovery.py` (`/api/aws/tag-options|discover|settings`), boto3 added. Tested: 14/14 backend, 100% frontend. Runs in DEMO/MOCK mode until real creds + live mode enabled.

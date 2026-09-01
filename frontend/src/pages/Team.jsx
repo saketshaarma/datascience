@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { UserPlus, Trash2, Shield, User } from "lucide-react";
+import { UserPlus, Trash2, Shield, User, Cloud, Save } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -11,8 +11,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/PageHeader";
-import { listUsers, createUser, deleteUser, formatApiErrorDetail } from "@/lib/api";
+import {
+  listUsers, createUser, deleteUser, formatApiErrorDetail,
+  getAwsSettings, saveAwsSettings,
+} from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 
@@ -72,6 +76,7 @@ export default function Team() {
         }
       />
       <div className="p-8">
+        {isAdmin && <AwsSettingsCard />}
         <div className="bg-[#18181B] border border-[#27272A] rounded-sm overflow-hidden max-w-3xl">
           <table className="w-full text-sm" data-testid="team-table">
             <thead>
@@ -152,3 +157,76 @@ export default function Team() {
     </div>
   );
 }
+
+
+const inputClsAws =
+  "bg-[#09090B] border-[#27272A] text-white font-mono text-sm focus-visible:ring-orange-500/50 focus-visible:ring-2";
+
+const AwsSettingsCard = () => {
+  const [form, setForm] = useState({ access_key_id: "", secret_access_key: "", region: "us-east-1", use_live: false });
+  const [info, setInfo] = useState({ configured: false, access_key_id_masked: "" });
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    getAwsSettings().then((s) => {
+      setInfo(s);
+      setForm((f) => ({ ...f, region: s.region || "us-east-1", use_live: s.use_live }));
+    }).catch(() => {});
+  }, []);
+
+  const save = async () => {
+    setBusy(true);
+    try {
+      const res = await saveAwsSettings(form);
+      toast.success("AWS settings saved");
+      setForm((f) => ({ ...f, access_key_id: "", secret_access_key: "" }));
+      const s = await getAwsSettings();
+      setInfo(s);
+      setForm((f) => ({ ...f, use_live: s.use_live, region: s.region }));
+    } catch (e) {
+      toast.error(formatApiErrorDetail(e.response?.data?.detail));
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div data-testid="aws-settings-card" className="bg-[#18181B] border border-[#27272A] rounded-sm p-5 max-w-3xl mb-6">
+      <div className="flex items-center gap-2 mb-1">
+        <Cloud className="h-4 w-4 text-orange-500" />
+        <h3 className="font-head font-semibold text-sm text-white">AWS Connection</h3>
+        <Badge variant="outline" className={`ml-2 rounded-sm font-mono text-[10px] ${info.configured ? "bg-green-500/15 text-green-400 border-green-500/30" : "bg-zinc-500/15 text-zinc-400 border-zinc-500/30"}`}>
+          {info.configured ? "configured" : "not set"}
+        </Badge>
+      </div>
+      <p className="text-xs text-zinc-500 mb-4">
+        Used by the Discovery Dashboard. Leave demo mode off to keep using mock discovery.
+        {info.configured && <> Current key: <span className="font-mono text-zinc-400">{info.access_key_id_masked}</span></>}
+      </p>
+      <div className="grid grid-cols-2 gap-4">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-zinc-400">AWS Access Key ID</Label>
+          <Input data-testid="aws-access-key" className={inputClsAws} value={form.access_key_id} onChange={(e) => setForm({ ...form, access_key_id: e.target.value })} placeholder={info.configured ? "•••• (unchanged)" : "AKIA..."} />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-zinc-400">AWS Secret Access Key</Label>
+          <Input data-testid="aws-secret-key" type="password" className={inputClsAws} value={form.secret_access_key} onChange={(e) => setForm({ ...form, secret_access_key: e.target.value })} placeholder={info.configured ? "•••• (unchanged)" : "secret"} />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-zinc-400">Default Region</Label>
+          <Input data-testid="aws-region" className={inputClsAws} value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} placeholder="ap-south-2" />
+        </div>
+        <div className="flex items-center gap-3 pt-6">
+          <Switch data-testid="aws-use-live" checked={form.use_live} onCheckedChange={(v) => setForm({ ...form, use_live: v })} />
+          <div>
+            <div className="text-sm text-white">Live discovery</div>
+            <div className="text-[11px] text-zinc-500">Off = demo/mock mode</div>
+          </div>
+        </div>
+      </div>
+      <div className="flex justify-end mt-4">
+        <Button data-testid="aws-save-settings" onClick={save} disabled={busy} className="bg-orange-500 hover:bg-orange-600 text-white rounded-sm gap-2">
+          <Save className="h-4 w-4" /> {busy ? "Saving…" : "Save AWS settings"}
+        </Button>
+      </div>
+    </div>
+  );
+};

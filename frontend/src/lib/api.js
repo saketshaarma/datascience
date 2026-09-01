@@ -80,6 +80,12 @@ export const updateCluster = (id, data) => client.put(`/k8s/clusters/${id}`, dat
 export const deleteCluster = (id) => client.delete(`/k8s/clusters/${id}`).then((r) => r.data);
 export const previewCluster = (data) => client.post("/k8s/preview", data).then((r) => r.data);
 
+// aws discovery
+export const getAwsSettings = () => client.get("/aws/settings").then((r) => r.data);
+export const saveAwsSettings = (data) => client.put("/aws/settings", data).then((r) => r.data);
+export const getTagOptions = () => client.get("/aws/tag-options").then((r) => r.data);
+export const discoverAws = (data) => client.post("/aws/discover", data).then((r) => r.data);
+
 // db config
 export const listDbServices = () => client.get("/db/services").then((r) => r.data);
 export const createDbService = (data) => client.post("/db/services", data).then((r) => r.data);
