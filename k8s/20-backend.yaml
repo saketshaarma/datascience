@@ -1,0 +1,91 @@
+# Build & push the backend image, then set it here:
+#   docker build -t <registry>/infraforge-backend:latest ./backend
+#   docker push <registry>/infraforge-backend:latest
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: infraforge-backend
+  namespace: infraforge
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: infraforge-backend
+  template:
+    metadata:
+      labels:
+        app: infraforge-backend
+    spec:
+      containers:
+        - name: backend
+          image: infraforge-backend:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8001
+          env:
+            - name: MONGO_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: infraforge-config
+                  key: MONGO_URL
+            - name: DB_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: infraforge-config
+                  key: DB_NAME
+            - name: CORS_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: infraforge-config
+                  key: CORS_ORIGINS
+            - name: FRONTEND_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: infraforge-config
+                  key: FRONTEND_URL
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: infraforge-secrets
+                  key: JWT_SECRET
+            - name: ADMIN_EMAIL
+              valueFrom:
+                secretKeyRef:
+                  name: infraforge-secrets
+                  key: ADMIN_EMAIL
+            - name: ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: infraforge-secrets
+                  key: ADMIN_PASSWORD
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 8001
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 8001
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "1"
+              memory: "1Gi"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: infraforge-backend
+  namespace: infraforge
+spec:
+  selector:
+    app: infraforge-backend
+  ports:
+    - port: 8001
+      targetPort: 8001

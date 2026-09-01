@@ -95,3 +95,11 @@ infrastructure. Acts as the central source of truth for DevOps/Infrastructure te
 - **Type-driven Discovery Dashboard**: five selectable type cards (EC2 Instances, Security Groups, Volumes, Route53 Zones, A Records) with live counts; selecting a type shows a table with type-specific columns (EC2: instance id, private IP, type; A record: value, ttl, zone; volume: device/size; zone: record count).
 - **Hover popups**: hovering a resource opens a rich detail card (full `details` grid + all tags + source/region).
 - Backend now emits richer resources with a `details` object and adds `route53_zone` (derived from A-record domains + k8s private zones) and `a_record` kinds. Tag filter (key/value) narrows all types. Tested: 100% backend + frontend.
+
+## Implemented (2026-06) — Iteration 11: Self-Hosting Artifacts
+- **Docker Compose** (`docker-compose.yml` + `.env.example`): one-command stack — Nginx frontend + FastAPI backend + MongoDB 7 (named volume `mongo_data`). Frontend proxies `/api` to backend (same-origin, no CORS).
+- **Backend image** (`backend/Dockerfile`): python:3.11-slim, installs requirements incl. emergentintegrations via extra index, runs uvicorn on 8001, `/api/health` healthcheck.
+- **Frontend image** (`frontend/Dockerfile` + `nginx.conf.template`): multi-stage node:20 build → nginx:1.27-alpine. Built with empty `REACT_APP_BACKEND_URL` so app calls `/api` same-origin; Nginx envsubst injects `BACKEND_HOST` into the `/api` proxy (NGINX_ENVSUBST_FILTER=BACKEND_HOST).
+- **Kubernetes manifests** (`k8s/00..40`): namespace, Secret (JWT/admin), ConfigMap, Mongo (PVC+Deployment+Service), backend Deployment+Service, frontend Deployment+Service, optional Ingress (nginx). All 8 YAMLs validated.
+- **DEPLOYMENT.md**: full self-hosting guide (Compose + K8s), config reference table, external/managed Mongo notes.
+- NOTE: could not run `docker build` in preview (no Docker daemon); YAML + build inputs validated, build steps mirror the working craco/pip flow.

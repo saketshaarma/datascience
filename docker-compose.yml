@@ -1,0 +1,56 @@
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - infraforge
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGO_URL: "mongodb://mongo:27017"
+      DB_NAME: "${DB_NAME:-infraforge}"
+      JWT_SECRET: "${JWT_SECRET}"
+      ADMIN_EMAIL: "${ADMIN_EMAIL:-admin@infraforge.io}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-*}"
+      FRONTEND_URL: "${FRONTEND_URL:-http://localhost:8080}"
+    networks:
+      - infraforge
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Empty => same-origin /api calls proxied by Nginx to the backend.
+        REACT_APP_BACKEND_URL: ""
+    restart: unless-stopped
+    depends_on:
+      - backend
+    environment:
+      BACKEND_HOST: "backend:8001"
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    networks:
+      - infraforge
+
+volumes:
+  mongo_data:
+
+networks:
+  infraforge:
+    driver: bridge

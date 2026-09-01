@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: infraforge-config
+  namespace: infraforge
+data:
+  DB_NAME: "infraforge"
+  MONGO_URL: "mongodb://mongo:27017"
+  CORS_ORIGINS: "*"
+  FRONTEND_URL: "http://localhost"
+  # Backend service target used by the frontend Nginx proxy
+  BACKEND_HOST: "infraforge-backend:8001"
