@@ -80,4 +80,30 @@ export const updateCluster = (id, data) => client.put(`/k8s/clusters/${id}`, dat
 export const deleteCluster = (id) => client.delete(`/k8s/clusters/${id}`).then((r) => r.data);
 export const previewCluster = (data) => client.post("/k8s/preview", data).then((r) => r.data);
 
+// db config
+export const listDbServices = () => client.get("/db/services").then((r) => r.data);
+export const createDbService = (data) => client.post("/db/services", data).then((r) => r.data);
+export const updateDbService = (id, data) => client.put(`/db/services/${id}`, data).then((r) => r.data);
+export const deleteDbService = (id) => client.delete(`/db/services/${id}`).then((r) => r.data);
+export const listDbInstances = (params) => client.get("/db/instances", { params }).then((r) => r.data);
+export const createDbInstance = (data) => client.post("/db/instances", data).then((r) => r.data);
+export const updateDbInstance = (id, data) => client.put(`/db/instances/${id}`, data).then((r) => r.data);
+export const deleteDbInstance = (id) => client.delete(`/db/instances/${id}`).then((r) => r.data);
+export const importDbExcel = (file) => {
+  const fd = new FormData();
+  fd.append("file", file);
+  return client.post("/db/import-excel", fd, { headers: { "Content-Type": "multipart/form-data" } }).then((r) => r.data);
+};
+export const exportDbJson = async () => {
+  const res = await client.get("/db/export-json");
+  const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "db_config.json";
+  a.click();
+  URL.revokeObjectURL(url);
+  return res.data;
+};
+
 export default client;

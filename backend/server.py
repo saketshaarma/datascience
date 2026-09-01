@@ -21,11 +21,13 @@ import auth
 from auth import auth_router, get_current_user, require_admin
 from terraform_generator import generate_terraform
 from k8s_generator import generate_k8s, build_config_json
+import db_config
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 auth.init(db)
+db_config.init(db)
 
 app = FastAPI(title="AWS Infra Inventory & Terraform Portal")
 
@@ -445,6 +447,7 @@ async def preview_cluster(payload: K8sClusterCreate):
 app.include_router(auth_router)
 app.include_router(open_router)
 app.include_router(api_router)
+app.include_router(db_config.router)
 
 app.add_middleware(
     CORSMiddleware,

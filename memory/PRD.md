@@ -74,3 +74,10 @@ infrastructure. Acts as the central source of truth for DevOps/Infrastructure te
 - Generates the **exact cluster config JSON** (nodes keyed `node1`, `node2`, …) plus provisioning **Terraform HCL**: `aws_vpc`/`aws_subnet`/`aws_route53_zone` data sources, `locals` for tags, one `aws_security_group`, per-node `aws_instance` with `root_block_device` + merged tags, and per-node private `aws_route53_record` (`<hostname>.<zone>` → instance private_ip).
 - Save/load/delete cluster configs (delete admin-only) in a separate `k8s_clusters` collection.
 - Backend: `k8s_generator.py`, endpoints `/api/k8s/clusters` CRUD + `/generate` + `/preview`. Tested: 12/12 backend, 100% frontend.
+
+## Implemented (2026-06) — Iteration 6
+- **DB Config panel** (`/db-config`): relational model — `db_services` (unique name), `db_instances` (service FK, host, port, instance_type, unique aws_instance_id, all_dns, srv_record, aws_region, environment enum DEV/QA/UAT/DR/PROD, status enum Running/Stopped/Terminated, timestamps), and `db_instance_metadata` (key/value per instance, embedded, unique per key).
+- Manage services (add/rename/delete) and instances with a metadata attribute editor; edit rights via dialog; delete admin-only; service delete blocked while it has instances.
+- **Excel (.xlsx) import**: auto-creates missing services, maps known columns, turns any extra columns into metadata attributes, skips duplicate aws_instance_id; returns `{imported, skipped}`.
+- **JSON export** in the exact relational shape (`db_services` / `db_instances` / `db_instance_metadata`) with integer ids and FK references.
+- Backend: `db_config.py` (`/api/db/*`), openpyxl added. Tested: 17/17 backend, 100% frontend.

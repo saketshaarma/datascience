@@ -9,6 +9,7 @@ import Inventory from "@/pages/Inventory";
 import DnsRecords from "@/pages/DnsRecords";
 import Generator from "@/pages/Generator";
 import Kubernetes from "@/pages/Kubernetes";
+import DbConfig from "@/pages/DbConfig";
 import Team from "@/pages/Team";
 import { Loader2 } from "lucide-react";
 
@@ -49,6 +50,7 @@ function App() {
             <Route path="/dns" element={<Protected><DnsRecords /></Protected>} />
             <Route path="/generator" element={<Protected><Generator /></Protected>} />
             <Route path="/kubernetes" element={<Protected><Kubernetes /></Protected>} />
+            <Route path="/db-config" element={<Protected><DbConfig /></Protected>} />
             <Route path="/team" element={<Protected><Team /></Protected>} />
           </Routes>
         </BrowserRouter>
