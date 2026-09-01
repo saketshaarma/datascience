@@ -1,31 +1,26 @@
 import { useEffect, useState, useCallback } from "react";
 import {
-  PieChart, Pie, Cell, ResponsiveContainer, Tooltip,
-} from "recharts";
-import {
-  Server, HardDrive, ShieldCheck, Globe, Database, Search, RefreshCw, Radar, Cloud,
+  Server, HardDrive, ShieldCheck, Globe, FileText, Search, RefreshCw, Radar, Cloud, Network, Tag as TagIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import {
+  HoverCard, HoverCardContent, HoverCardTrigger,
+} from "@/components/ui/hover-card";
 import { PageHeader } from "@/components/PageHeader";
 import { getTagOptions, discoverAws } from "@/lib/api";
 import { toast } from "sonner";
 
-const COLORS = ["#F97316", "#3B82F6", "#22C55E", "#EAB308", "#A855F7", "#EC4899"];
-
-const KIND_META = {
-  ec2_instance: { label: "EC2", icon: Server },
-  ebs_volume: { label: "EBS Volume", icon: HardDrive },
-  security_group: { label: "Security Group", icon: ShieldCheck },
-  route53_record: { label: "Route53", icon: Globe },
-  rds_instance: { label: "RDS / DB", icon: Database },
-};
-
-const kindLabel = (k) => KIND_META[k]?.label || k;
-const kindIcon = (k) => KIND_META[k]?.icon || Cloud;
+const TYPES = [
+  { kind: "ec2_instance", label: "EC2 Instances", icon: Server },
+  { kind: "security_group", label: "Security Groups", icon: ShieldCheck },
+  { kind: "ebs_volume", label: "Volumes", icon: HardDrive },
+  { kind: "route53_zone", label: "Route53 Zones", icon: Globe },
+  { kind: "a_record", label: "A Records", icon: FileText },
+];
 
 const sourceColor = (s) => ({
   inventory: "bg-orange-500/15 text-orange-400 border-orange-500/30",
@@ -34,6 +29,49 @@ const sourceColor = (s) => ({
   aws: "bg-purple-500/15 text-purple-400 border-purple-500/30",
 }[s] || "bg-zinc-500/15 text-zinc-400 border-zinc-500/30");
 
+const D = (r, k) => {
+  const v = (r.details || {})[k];
+  if (v === null || v === undefined || v === "") return "—";
+  if (Array.isArray(v)) return v.join(", ");
+  return String(v);
+};
+
+const COLUMNS = {
+  ec2_instance: [
+    { label: "Name", render: (r) => r.name },
+    { label: "Instance ID", render: (r) => D(r, "instance_id") },
+    { label: "Private IP", render: (r) => D(r, "private_ip") },
+    { label: "Type", render: (r) => D(r, "instance_type") },
+    { label: "Region", render: (r) => r.region || "—" },
+  ],
+  security_group: [
+    { label: "Name", render: (r) => r.name },
+    { label: "Ports", render: (r) => D(r, "ports") },
+    { label: "VPC / Cluster", render: (r) => D(r, "vpc") !== "—" ? D(r, "vpc") : D(r, "cluster") },
+    { label: "Region", render: (r) => r.region || "—" },
+  ],
+  ebs_volume: [
+    { label: "Name", render: (r) => r.name },
+    { label: "Device", render: (r) => D(r, "device_name") },
+    { label: "Size (GB)", render: (r) => D(r, "size_gb") },
+    { label: "Type", render: (r) => D(r, "volume_type") },
+    { label: "Attached To", render: (r) => D(r, "attached_to") },
+  ],
+  route53_zone: [
+    { label: "Zone", render: (r) => r.name },
+    { label: "Records", render: (r) => D(r, "record_count") },
+    { label: "Private", render: (r) => (r.details?.private ? "yes" : "no") },
+    { label: "Region", render: (r) => r.region || "—" },
+  ],
+  a_record: [
+    { label: "Record", render: (r) => r.name },
+    { label: "Type", render: (r) => D(r, "type") },
+    { label: "Value", render: (r) => D(r, "value") },
+    { label: "TTL", render: (r) => D(r, "ttl") },
+    { label: "Zone", render: (r) => D(r, "zone") },
+  ],
+};
+
 export default function Dashboard() {
   const [tagKeys, setTagKeys] = useState([]);
   const [tagValues, setTagValues] = useState({});
@@ -41,6 +79,7 @@ export default function Dashboard() {
   const [value, setValue] = useState("__all__");
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [activeKind, setActiveKind] = useState("ec2_instance");
 
   const loadTags = useCallback(async () => {
     try {
@@ -61,21 +100,22 @@ export default function Dashboard() {
       setData(await discoverAws(body));
     } catch (e) {
       toast.error(e?.response?.data?.detail || "Discovery failed");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { loadTags(); run("__all__", "__all__"); }, [loadTags, run]);
 
   const onKeyChange = (k) => { setKey(k); setValue("__all__"); };
-  const s = data || { total: 0, by_kind: [], by_source: [], resources: [], mode: "demo", region: "-", account_id: "-" };
+  const s = data || { total: 0, resources: [], mode: "demo", region: "-", account_id: "-" };
+  const countOf = (kind) => s.resources.filter((r) => r.kind === kind).length;
+  const rows = s.resources.filter((r) => r.kind === activeKind);
+  const cols = COLUMNS[activeKind];
 
   return (
     <div>
       <PageHeader
         title="Discovery Dashboard"
-        subtitle="AWS resources discovered by tags across all sections"
+        subtitle="Select a resource type, filter by tags, hover for details"
         actions={
           <Badge variant="outline" className={`rounded-sm font-mono text-[11px] gap-1.5 ${s.mode === "live" ? "bg-green-500/15 text-green-400 border-green-500/30" : "bg-yellow-500/15 text-yellow-400 border-yellow-500/30"}`}>
             <Cloud className="h-3 w-3" /> {s.mode === "live" ? "LIVE AWS" : "DEMO MODE"}
@@ -84,11 +124,37 @@ export default function Dashboard() {
       />
 
       <div className="p-8 space-y-6">
-        {/* discovery control bar */}
+        {/* type selector */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          {TYPES.map((t) => {
+            const Icon = t.icon;
+            const active = activeKind === t.kind;
+            return (
+              <button
+                key={t.kind}
+                data-testid={`type-${t.kind}`}
+                onClick={() => setActiveKind(t.kind)}
+                className={`text-left rounded-sm border p-4 transition-all duration-150 ${
+                  active
+                    ? "bg-orange-500/10 border-orange-500 ring-1 ring-orange-500/40"
+                    : "bg-[#18181B] border-[#27272A] hover:border-white/25 hover:-translate-y-0.5"
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <Icon className={`h-4 w-4 ${active ? "text-orange-400" : "text-zinc-500"}`} />
+                  <span className="font-head font-bold text-2xl text-white tabular-nums">{countOf(t.kind)}</span>
+                </div>
+                <div className={`text-xs mt-2 ${active ? "text-orange-300" : "text-zinc-400"}`}>{t.label}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* filter bar */}
         <div className="bg-[#18181B] border border-[#27272A] rounded-sm p-4 flex flex-wrap items-end gap-3">
           <div className="flex items-center gap-2 text-orange-500 mr-2">
             <Radar className="h-5 w-5" />
-            <span className="font-head font-semibold text-sm text-white">Discover by tag</span>
+            <span className="font-head font-semibold text-sm text-white">Filter by tag</span>
           </div>
           <div className="space-y-1">
             <label className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Tag key</label>
@@ -116,108 +182,103 @@ export default function Dashboard() {
             {loading ? "Discovering…" : "Discover"}
           </Button>
           <div className="ml-auto text-xs text-zinc-500 font-mono self-center">
-            region <span className="text-zinc-300">{s.region}</span> · account <span className="text-zinc-300">{s.account_id}</span>
+            {s.total} total · region <span className="text-zinc-300">{s.region}</span> · acct <span className="text-zinc-300">{s.account_id}</span>
           </div>
         </div>
 
-        {/* summary cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-          <div data-testid="stat-total" className="bg-[#18181B] border border-[#27272A] rounded-sm p-5 animate-fade-up">
-            <div className="flex items-center justify-between">
-              <span className="text-xs uppercase tracking-wider text-zinc-500 font-mono">Total</span>
-              <Cloud className="h-4 w-4 text-orange-500" />
-            </div>
-            <div className="font-head font-bold text-3xl text-white mt-3 tabular-nums">{s.total}</div>
-          </div>
-          {["ec2_instance", "ebs_volume", "security_group", "route53_record", "rds_instance"].map((k) => {
-            const Icon = kindIcon(k);
-            const v = s.by_kind.find((x) => x.name === k)?.value || 0;
-            return (
-              <div key={k} data-testid={`stat-${k}`} className="bg-[#18181B] border border-[#27272A] rounded-sm p-5 animate-fade-up">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs uppercase tracking-wider text-zinc-500 font-mono">{kindLabel(k)}</span>
-                  <Icon className="h-4 w-4 text-zinc-500" />
-                </div>
-                <div className="font-head font-bold text-3xl text-white mt-3 tabular-nums">{v}</div>
-              </div>
-            );
-          })}
-        </div>
-
-        <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-4">
-          {/* by source pie */}
-          <div className="bg-[#18181B] border border-[#27272A] rounded-sm p-5">
-            <h3 className="font-head font-semibold text-sm text-white mb-4">By Source</h3>
-            {s.by_source.length === 0 ? (
-              <div className="h-[220px] flex items-center justify-center text-sm text-zinc-600">No resources</div>
-            ) : (
-              <>
-                <ResponsiveContainer width="100%" height={200}>
-                  <PieChart>
-                    <Pie data={s.by_source} dataKey="value" nameKey="name" innerRadius={45} outerRadius={80} paddingAngle={2} stroke="#09090B">
-                      {s.by_source.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                    </Pie>
-                    <Tooltip contentStyle={{ background: "#09090B", border: "1px solid #27272A", borderRadius: "2px", fontSize: "12px", fontFamily: "JetBrains Mono" }} />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="flex flex-wrap gap-x-4 gap-y-1.5 mt-3">
-                  {s.by_source.map((it, i) => (
-                    <div key={it.name} className="flex items-center gap-2 text-xs text-zinc-400">
-                      <span className="h-2.5 w-2.5 rounded-sm" style={{ background: COLORS[i % COLORS.length] }} />
-                      <span className="font-mono">{it.name}</span><span className="text-zinc-600">{it.value}</span>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* resource table */}
-          <div className="bg-[#18181B] border border-[#27272A] rounded-sm overflow-hidden">
-            <div className="overflow-x-auto max-h-[520px]">
-              <table className="w-full text-sm" data-testid="discovery-table">
-                <thead className="sticky top-0 bg-[#18181B]">
-                  <tr className="border-b border-[#27272A] text-left text-[11px] uppercase tracking-wider text-zinc-500">
-                    <th className="px-4 py-3 font-medium">Kind</th>
-                    <th className="px-4 py-3 font-medium">Name / ID</th>
-                    <th className="px-4 py-3 font-medium">Region</th>
-                    <th className="px-4 py-3 font-medium">Source</th>
-                    <th className="px-4 py-3 font-medium">Tags</th>
+        {/* type table */}
+        <div className="bg-[#18181B] border border-[#27272A] rounded-sm overflow-hidden">
+          <div className="overflow-x-auto max-h-[540px]">
+            <table className="w-full text-sm" data-testid="discovery-table">
+              <thead className="sticky top-0 bg-[#18181B]">
+                <tr className="border-b border-[#27272A] text-left text-[11px] uppercase tracking-wider text-zinc-500">
+                  {cols.map((c) => <th key={c.label} className="px-4 py-3 font-medium">{c.label}</th>)}
+                  <th className="px-4 py-3 font-medium">Source</th>
+                  <th className="px-4 py-3 font-medium text-right">Tags</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 ? (
+                  <tr><td colSpan={cols.length + 2} className="px-4 py-16 text-center text-zinc-600">No {TYPES.find((t) => t.kind === activeKind)?.label} for this filter.</td></tr>
+                ) : rows.map((r, i) => (
+                  <tr key={i} data-testid={`res-row-${i}`} className="border-b border-[#27272A]/60 hover:bg-white/5 transition-colors duration-150">
+                    {cols.map((c, ci) => (
+                      <td key={c.label} className="px-4 py-2.5 font-mono text-zinc-300">
+                        {ci === 0 ? (
+                          <HoverCard openDelay={80} closeDelay={40}>
+                            <HoverCardTrigger asChild>
+                              <span data-testid={`res-hover-${i}`} className="text-white font-medium cursor-help underline decoration-dotted decoration-zinc-600 underline-offset-4">
+                                {c.render(r)}
+                              </span>
+                            </HoverCardTrigger>
+                            <HoverCardContent side="right" align="start" className="w-80 bg-[#0d0d0f] border-[#27272A] text-white rounded-sm p-0 overflow-hidden">
+                              <ResourcePopup r={r} />
+                            </HoverCardContent>
+                          </HoverCard>
+                        ) : c.render(r)}
+                      </td>
+                    ))}
+                    <td className="px-4 py-2.5"><Badge variant="outline" className={`rounded-sm font-mono text-[11px] ${sourceColor(r.source)}`}>{r.source}</Badge></td>
+                    <td className="px-4 py-2.5">
+                      <div className="flex flex-wrap gap-1 justify-end max-w-xs">
+                        {Object.entries(r.tags || {}).slice(0, 3).map(([k, v]) => (
+                          <span key={k} className="text-[10px] font-mono bg-white/5 text-zinc-400 rounded-sm px-1.5 py-0.5">{k}={v}</span>
+                        ))}
+                        {Object.keys(r.tags || {}).length > 3 && <span className="text-[10px] text-zinc-600">+{Object.keys(r.tags).length - 3}</span>}
+                      </div>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {s.resources.length === 0 ? (
-                    <tr><td colSpan={5} className="px-4 py-16 text-center text-zinc-600">No resources discovered for this filter.</td></tr>
-                  ) : s.resources.map((r, i) => {
-                    const Icon = kindIcon(r.kind);
-                    return (
-                      <tr key={i} className="border-b border-[#27272A]/60 hover:bg-white/5 transition-colors duration-150">
-                        <td className="px-4 py-2.5">
-                          <span className="flex items-center gap-2 text-zinc-300"><Icon className="h-4 w-4 text-orange-500" /> {kindLabel(r.kind)}</span>
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <div className="text-white">{r.name}</div>
-                          <div className="text-[11px] text-zinc-600 font-mono">{r.id}</div>
-                        </td>
-                        <td className="px-4 py-2.5 font-mono text-zinc-400">{r.region || "—"}</td>
-                        <td className="px-4 py-2.5"><Badge variant="outline" className={`rounded-sm font-mono text-[11px] ${sourceColor(r.source)}`}>{r.source}</Badge></td>
-                        <td className="px-4 py-2.5">
-                          <div className="flex flex-wrap gap-1 max-w-md">
-                            {Object.entries(r.tags || {}).slice(0, 4).map(([k, v]) => (
-                              <span key={k} className="text-[10px] font-mono bg-white/5 text-zinc-400 rounded-sm px-1.5 py-0.5">{k}={v}</span>
-                            ))}
-                            {Object.keys(r.tags || {}).length > 4 && <span className="text-[10px] text-zinc-600">+{Object.keys(r.tags).length - 4}</span>}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
     </div>
   );
 }
+
+const ResourcePopup = ({ r }) => {
+  const Icon = TYPES.find((t) => t.kind === r.kind)?.icon || Cloud;
+  return (
+    <div>
+      <div className="flex items-center gap-2.5 px-4 py-3 bg-orange-500/10 border-b border-[#27272A]">
+        <div className="h-8 w-8 rounded-sm bg-orange-500/15 flex items-center justify-center">
+          <Icon className="h-4 w-4 text-orange-400" />
+        </div>
+        <div className="min-w-0">
+          <div className="font-head font-semibold text-white text-sm truncate">{r.name}</div>
+          <div className="text-[10px] font-mono text-zinc-500">{r.id}</div>
+        </div>
+      </div>
+      <div className="p-4 space-y-3">
+        <div className="grid grid-cols-2 gap-x-3 gap-y-2">
+          {Object.entries(r.details || {}).map(([k, v]) => (
+            <div key={k}>
+              <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-mono">{k.replace(/_/g, " ")}</div>
+              <div className="text-xs text-zinc-200 font-mono truncate" title={String(v)}>
+                {v === null || v === undefined || v === "" ? "—" : Array.isArray(v) ? v.join(", ") : String(v)}
+              </div>
+            </div>
+          ))}
+        </div>
+        <div className="pt-2 border-t border-[#27272A]">
+          <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-zinc-600 font-mono mb-1.5">
+            <TagIcon className="h-3 w-3" /> Tags
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {Object.keys(r.tags || {}).length === 0 ? (
+              <span className="text-xs text-zinc-600">none</span>
+            ) : Object.entries(r.tags).map(([k, v]) => (
+              <span key={k} className="text-[10px] font-mono bg-white/5 text-zinc-300 rounded-sm px-1.5 py-0.5">{k}={v}</span>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center justify-between pt-1">
+          <Badge variant="outline" className={`rounded-sm font-mono text-[10px] ${sourceColor(r.source)}`}>{r.source}</Badge>
+          <span className="text-[10px] font-mono text-zinc-500">{r.region}</span>
+        </div>
+      </div>
+    </div>
+  );
+};

@@ -45,7 +45,21 @@ async def _get_settings():
 # ----------------------------- mock discovery -----------------------------
 async def _collect_resources():
     res = []
+    zones = {}  # zone_name -> {tags, source, count}
 
+    def add_zone(name, tags, source):
+        name = (name or "").strip().rstrip(".")
+        if not name:
+            return
+        z = zones.setdefault(name, {"tags": tags, "source": source, "count": 0})
+        z["count"] += 1
+
+    def zone_of(dns):
+        dns = (dns or "").strip().rstrip(".")
+        parts = dns.split(".")
+        return ".".join(parts[-2:]) if len(parts) >= 2 else dns
+
+    # ---- inventory ----
     async for ins in _db.instances.find({}, {"_id": 0}):
         tags = dict(ins.get("tags") or {})
         tags.update(ins.get("custom_metadata") or {})
@@ -55,48 +69,96 @@ async def _collect_resources():
             tags["Role"] = ins["instance_role"]
         name = ins.get("instance_name") or ins.get("host") or "instance"
         region = ins.get("region", "")
-        res.append({"id": ins.get("ec2_instance_id") or ins.get("host") or name,
-                    "kind": "ec2_instance", "name": name, "region": region,
-                    "status": "Running", "source": "inventory", "tags": tags})
+        host = ins.get("host", "")
+        res.append({"id": ins.get("ec2_instance_id") or host or name, "kind": "ec2_instance",
+                    "name": name, "region": region, "status": "Running", "source": "inventory",
+                    "tags": tags, "details": {
+                        "instance_id": ins.get("ec2_instance_id", ""), "private_ip": host,
+                        "public_ip": ins.get("public_ip", ""), "port": ins.get("port"),
+                        "instance_type": ins.get("ec2_instance_type", ""), "ami": ins.get("ami_id", ""),
+                        "vpc": ins.get("vpc_id", ""), "subnet": ins.get("subnet_id", ""),
+                        "environment": ins.get("environment", ""), "role": ins.get("instance_role", "")}})
         if ins.get("port"):
             res.append({"id": f"sg-{name}", "kind": "security_group", "name": f"{name}-sg",
-                        "region": region, "status": "active", "source": "inventory", "tags": tags})
-        for d in ins.get("dns_records", []):
-            res.append({"id": d, "kind": "route53_record", "name": d, "region": "global",
-                        "status": "active", "source": "inventory", "tags": tags})
+                        "region": region, "status": "active", "source": "inventory", "tags": tags,
+                        "details": {"ports": [ins["port"]], "vpc": ins.get("vpc_id", ""),
+                                    "protocol": "tcp"}})
         for v in ins.get("ebs_volumes", []):
             dev = v.get("device_name") or "vol"
             res.append({"id": f"{name}-{dev}", "kind": "ebs_volume", "name": dev, "region": region,
-                        "status": "in-use", "source": "inventory", "tags": tags})
+                        "status": "in-use", "source": "inventory", "tags": tags,
+                        "details": {"device_name": dev, "size_gb": v.get("size_gb"),
+                                    "volume_type": v.get("volume_type", "gp3"), "attached_to": name}})
+        for d in ins.get("dns_records", []):
+            d = d.strip()
+            if not d:
+                continue
+            z = zone_of(d)
+            add_zone(z, tags, "inventory")
+            res.append({"id": d, "kind": "a_record", "name": d, "region": "global", "status": "active",
+                        "source": "inventory", "tags": tags,
+                        "details": {"record": d, "type": "A", "value": host, "ttl": 300, "zone": z}})
 
+    # ---- db config ----
     svc = {s["id"]: s["service_name"] async for s in _db.db_services.find({}, {"_id": 0})}
     async for d in _db.db_instances.find({}, {"_id": 0}):
         tags = {m["attribute_key"]: m["attribute_value"] for m in d.get("metadata", [])}
         tags["Environment"] = d.get("environment", "DEV")
         if svc.get(d.get("service_id")):
             tags["Service"] = svc[d["service_id"]]
-        res.append({"id": d.get("aws_instance_id") or d.get("instance_name"),
-                    "kind": "rds_instance", "name": d.get("instance_name"),
-                    "region": d.get("aws_region", ""), "status": d.get("status", "Running"),
-                    "source": "db_config", "tags": tags})
+        host = d.get("host", "")
+        res.append({"id": d.get("aws_instance_id") or d.get("instance_name"), "kind": "ec2_instance",
+                    "name": d.get("instance_name"), "region": d.get("aws_region", ""),
+                    "status": d.get("status", "Running"), "source": "db_config", "tags": tags,
+                    "details": {"instance_id": d.get("aws_instance_id", ""), "private_ip": host,
+                                "port": d.get("port"), "instance_type": d.get("instance_type", ""),
+                                "service": tags.get("Service", ""), "environment": d.get("environment", "")}})
+        adns = (d.get("all_dns") or "").strip()
+        if adns:
+            z = zone_of(adns)
+            add_zone(z, tags, "db_config")
+            res.append({"id": adns, "kind": "a_record", "name": adns, "region": "global", "status": "active",
+                        "source": "db_config", "tags": tags,
+                        "details": {"record": adns, "type": "A", "value": host, "ttl": 300, "zone": z}})
 
+    # ---- kubernetes ----
     async for c in _db.k8s_clusters.find({}, {"_id": 0}):
         itags = dict(c.get("instance_tags") or {})
         vtags = dict(c.get("volume_tags") or {})
         stags = dict(c.get("security_group_tags") or {})
         region = c.get("aws_region", "")
         cname = c.get("name", "cluster")
+        zone = c.get("private_zone_name", "")
+        if zone:
+            add_zone(zone, itags, "kubernetes")
         for n in c.get("nodes", []):
             host = n.get("hostname") or "node"
             t = dict(itags); t["Name"] = host; t["Cluster"] = cname
-            res.append({"id": f"{cname}-{host}", "kind": "ec2_instance", "name": host,
-                        "region": region, "status": "Running", "source": "kubernetes", "tags": t})
+            res.append({"id": f"{cname}-{host}", "kind": "ec2_instance", "name": host, "region": region,
+                        "status": "Running", "source": "kubernetes", "tags": t,
+                        "details": {"instance_type": n.get("instance_type", ""), "cluster": cname,
+                                    "root_volume_size": n.get("root_volume_size"), "hostname": host}})
             vt = dict(vtags); vt["Name"] = f"{host}-root"; vt["Cluster"] = cname
             res.append({"id": f"{cname}-{host}-vol", "kind": "ebs_volume", "name": f"{host}-root",
-                        "region": region, "status": "in-use", "source": "kubernetes", "tags": vt})
+                        "region": region, "status": "in-use", "source": "kubernetes", "tags": vt,
+                        "details": {"device_name": "/dev/xvda", "size_gb": n.get("root_volume_size"),
+                                    "volume_type": "gp3", "attached_to": host}})
+            if zone:
+                rec = f"{host}.{zone}"
+                res.append({"id": rec, "kind": "a_record", "name": rec, "region": "global",
+                            "status": "active", "source": "kubernetes", "tags": t,
+                            "details": {"record": rec, "type": "A", "value": "(instance private_ip)",
+                                        "ttl": 300, "zone": zone}})
         st = dict(stags); st["Name"] = f"{cname}-sg"; st["Cluster"] = cname
-        res.append({"id": f"{cname}-sg", "kind": "security_group", "name": f"{cname}-sg",
-                    "region": region, "status": "active", "source": "kubernetes", "tags": st})
+        res.append({"id": f"{cname}-sg", "kind": "security_group", "name": f"{cname}-sg", "region": region,
+                    "status": "active", "source": "kubernetes", "tags": st,
+                    "details": {"ports": ["all (self)"], "cluster": cname, "protocol": "-1"}})
+
+    # ---- route53 zones (derived) ----
+    for zname, z in zones.items():
+        res.append({"id": zname, "kind": "route53_zone", "name": zname, "region": "global",
+                    "status": "private", "source": z["source"], "tags": z["tags"],
+                    "details": {"zone_name": zname, "record_count": z["count"], "private": True}})
 
     return res
 
@@ -128,7 +190,7 @@ def _discover_live_sync(access_key, secret, region, tag_key, tag_value):
     tag_filters = [{"Key": tag_key, "Values": [tag_value] if tag_value else []}] if tag_key else []
     out = []
     kind_map = {"instance": "ec2_instance", "volume": "ebs_volume",
-                "security-group": "security_group", "db": "rds_instance"}
+                "security-group": "security_group"}
     for page in tagging.get_paginator("get_resources").paginate(
             TagFilters=tag_filters,
             ResourceTypeFilters=["ec2:instance", "ec2:volume", "ec2:security-group", "rds:db"],

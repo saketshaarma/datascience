@@ -90,3 +90,8 @@ infrastructure. Acts as the central source of truth for DevOps/Infrastructure te
 - **Discovery Dashboard**: aggregates every resource across Inventory + DB Config + Kubernetes into a unified AWS discovery view (EC2, EBS, security groups, Route53, RDS/DB), filterable by a selectable tag key + value; summary cards, by-source pie, resource table, DEMO/LIVE mode badge.
 - **AWS connection settings** (admin, Team page): access key / secret / region + live-mode toggle (off = demo/mock, on = boto3 Resource Groups Tagging API). Secret write-only, returned masked.
 - Backend: `aws_discovery.py` (`/api/aws/tag-options|discover|settings`), boto3 added. Tested: 14/14 backend, 100% frontend. Runs in DEMO/MOCK mode until real creds + live mode enabled.
+
+## Implemented (2026-06) — Iteration 10
+- **Type-driven Discovery Dashboard**: five selectable type cards (EC2 Instances, Security Groups, Volumes, Route53 Zones, A Records) with live counts; selecting a type shows a table with type-specific columns (EC2: instance id, private IP, type; A record: value, ttl, zone; volume: device/size; zone: record count).
+- **Hover popups**: hovering a resource opens a rich detail card (full `details` grid + all tags + source/region).
+- Backend now emits richer resources with a `details` object and adds `route53_zone` (derived from A-record domains + k8s private zones) and `a_record` kinds. Tag filter (key/value) narrows all types. Tested: 100% backend + frontend.
