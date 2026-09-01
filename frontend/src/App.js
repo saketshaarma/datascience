@@ -5,11 +5,8 @@ import { AuthProvider, useAuth } from "@/context/AuthContext";
 import { Sidebar } from "@/components/Sidebar";
 import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
-import Inventory from "@/pages/Inventory";
-import DnsRecords from "@/pages/DnsRecords";
-import Generator from "@/pages/Generator";
-import Kubernetes from "@/pages/Kubernetes";
 import DbConfig from "@/pages/DbConfig";
+import Kubernetes from "@/pages/Kubernetes";
 import Team from "@/pages/Team";
 import { Loader2 } from "lucide-react";
 
@@ -46,12 +43,10 @@ function App() {
           <Routes>
             <Route path="/login" element={<PublicOnly><Login /></PublicOnly>} />
             <Route path="/" element={<Protected><Dashboard /></Protected>} />
-            <Route path="/inventory" element={<Protected><Inventory /></Protected>} />
-            <Route path="/dns" element={<Protected><DnsRecords /></Protected>} />
-            <Route path="/generator" element={<Protected><Generator /></Protected>} />
-            <Route path="/kubernetes" element={<Protected><Kubernetes /></Protected>} />
             <Route path="/db-config" element={<Protected><DbConfig /></Protected>} />
+            <Route path="/kubernetes" element={<Protected><Kubernetes /></Protected>} />
             <Route path="/team" element={<Protected><Team /></Protected>} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </AuthProvider>
