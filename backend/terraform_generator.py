@@ -51,102 +51,131 @@ def _build_resources(instances, resources, zone_id, default_ami, default_instanc
         used_names.add(name)
         return name
 
+    # Group instances by host so one host == one EC2 instance (multiple ports merge).
+    groups = []          # list of (key, [instances])
+    index = {}
     for ins in instances:
-        host = ins.get("host") or ""
-        name = ins.get("instance_name") or "instance"
-        role = ins.get("instance_role") or ""
-        port = ins.get("port")
-        base_slug = _slug(name, host.replace(".", "_"))
-        ec2_rname = None  # set when an EC2 resource is generated for this instance
+        host = (ins.get("host") or "").strip()
+        key = host if host else f"__nohost_{id(ins)}"
+        if key not in index:
+            index[key] = len(groups)
+            groups.append((key, []))
+        groups[index[key]][1].append(ins)
 
-        # EC2 — new instance is provisioned FROM this base instance's AMI
+    for key, members in groups:
+        first = members[0]
+        host = (first.get("host") or "").strip()
+        name = first.get("instance_name") or "instance"
+        role = first.get("instance_role") or ""
+        base_slug = _slug(name, host.replace(".", "_"))
+        ec2_rname = None
+
+        def pick(field, default=""):
+            for m in members:
+                v = m.get(field)
+                if v:
+                    return v
+            return default
+
+        # distinct ports across the host's records
+        ports = []
+        for m in members:
+            p = m.get("port")
+            if p and p not in ports:
+                ports.append(p)
+
+        # EC2 — one per host, provisioned FROM this host's base AMI
         if "ec2" in resources:
             ec2_rname = uniq(_slug("ec2", base_slug))
             tags = {"Name": name or host, "Role": role, "Host": host,
-                    "Environment": ins.get("environment", ""),
-                    "ManagedBy": "infra-portal"}
-            # merge user-defined AWS tags + custom metadata
-            for k, v in (ins.get("tags") or {}).items():
-                tags[k] = v
-            for k, v in (ins.get("custom_metadata") or {}).items():
-                tags[k] = v
+                    "Environment": pick("environment"), "ManagedBy": "infra-portal"}
+            for m in members:
+                for k, v in (m.get("tags") or {}).items():
+                    tags[k] = v
+                for k, v in (m.get("custom_metadata") or {}).items():
+                    tags[k] = v
             tags = {k: v for k, v in tags.items() if v not in (None, "")}
             attrs = {
-                "ami": ins.get("ami_id") or default_ami,
-                "instance_type": ins.get("ec2_instance_type") or default_instance_type,
+                "ami": pick("ami_id") or default_ami,
+                "instance_type": pick("ec2_instance_type") or default_instance_type,
             }
-            if ins.get("subnet_id"):
-                attrs["subnet_id"] = ins["subnet_id"]
-            if ins.get("key_name"):
-                attrs["key_name"] = ins["key_name"]
-            if ins.get("availability_zone"):
-                attrs["availability_zone"] = ins["availability_zone"]
-            if ins.get("iam_instance_profile"):
-                attrs["iam_instance_profile"] = ins["iam_instance_profile"]
-            sgs = [s for s in (ins.get("security_groups") or []) if s]
+            if pick("subnet_id"):
+                attrs["subnet_id"] = pick("subnet_id")
+            if pick("key_name"):
+                attrs["key_name"] = pick("key_name")
+            if pick("availability_zone"):
+                attrs["availability_zone"] = pick("availability_zone")
+            if pick("iam_instance_profile"):
+                attrs["iam_instance_profile"] = pick("iam_instance_profile")
+            sgs = []
+            for m in members:
+                for s in (m.get("security_groups") or []):
+                    if s and s not in sgs:
+                        sgs.append(s)
             if sgs:
                 attrs["vpc_security_group_ids"] = sgs
-            ebs = [v for v in (ins.get("ebs_volumes") or []) if v.get("device_name")]
+            ebs, seen_dev = [], set()
+            for m in members:
+                for v in (m.get("ebs_volumes") or []):
+                    dev = v.get("device_name")
+                    if dev and dev not in seen_dev:
+                        seen_dev.add(dev)
+                        ebs.append(v)
             blocks.append({"type": "aws_instance", "name": ec2_rname,
                            "attrs": attrs, "tags": tags, "ebs": ebs})
 
-        # Security group from port
-        if "sg" in resources and port:
+        # Security group — one per host, an ingress rule per distinct port
+        if "sg" in resources and ports:
             rname = uniq(_slug("sg", base_slug))
             blocks.append({
                 "type": "aws_security_group", "name": rname,
                 "attrs": {
                     "name": f"{base_slug}_sg",
-                    "description": f"Security group for {name or host} port {port}",
+                    "description": f"Security group for {name or host} (ports {', '.join(str(p) for p in ports)})",
                 },
-                "vpc_id": ins.get("vpc_id") or None,
-                "ingress": [{"from_port": port, "to_port": port,
-                             "protocol": "tcp", "cidr_blocks": ["10.0.0.0/8"]}],
+                "vpc_id": pick("vpc_id") or None,
+                "ingress": [{"from_port": p, "to_port": p, "protocol": "tcp",
+                             "cidr_blocks": ["10.0.0.0/8"]} for p in ports],
                 "tags": {"Name": f"{base_slug}_sg", "ManagedBy": "infra-portal"},
             })
 
-        # Route53 DNS (A records) — map to the CREATED instance, not the host IP
+        # Route53 DNS (A records) — aggregate host's records, map to the single EC2
         if "dns" in resources:
             if dns_target in ("instance_private", "instance_public") and ec2_rname:
                 attr = "private_ip" if dns_target == "instance_private" else "public_ip"
                 record_val = [Raw(f"aws_instance.{ec2_rname}.{attr}")]
             else:
                 record_val = [host] if host else ["0.0.0.0"]
-            for dns in ins.get("dns_records", []):
-                dns = dns.strip()
-                if not dns:
-                    continue
-                rname = uniq(_slug("dns", dns.replace(".", "_")))
-                blocks.append({
-                    "type": "aws_route53_record", "name": rname,
-                    "attrs": {
-                        "zone_id": zone_id,
-                        "name": dns,
-                        "type": "A",
-                        "ttl": 300,
-                        "records": list(record_val),
-                    },
-                })
+            dns_seen = set()
+            for m in members:
+                for dns in m.get("dns_records", []):
+                    dns = dns.strip()
+                    if not dns or dns in dns_seen:
+                        continue
+                    dns_seen.add(dns)
+                    rname = uniq(_slug("dns", dns.replace(".", "_")))
+                    blocks.append({
+                        "type": "aws_route53_record", "name": rname,
+                        "attrs": {"zone_id": zone_id, "name": dns, "type": "A",
+                                  "ttl": 300, "records": list(record_val)},
+                    })
 
-        # Route53 SRV records
+        # Route53 SRV records — per record, keyed to its own port
         if "srv" in resources:
-            for srv in ins.get("srv_records", []):
-                srv = srv.strip()
-                if not srv:
-                    continue
-                rname = uniq(_slug("srv", srv.replace(".", "_")))
-                target = srv if srv.endswith(".") else srv + "."
-                srv_value = f"0 5 {port or 3306} {target}"
-                blocks.append({
-                    "type": "aws_route53_record", "name": rname,
-                    "attrs": {
-                        "zone_id": zone_id,
-                        "name": f"_service._tcp.{srv}",
-                        "type": "SRV",
-                        "ttl": 300,
-                        "records": [srv_value],
-                    },
-                })
+            for m in members:
+                mport = m.get("port")
+                for srv in m.get("srv_records", []):
+                    srv = srv.strip()
+                    if not srv:
+                        continue
+                    rname = uniq(_slug("srv", srv.replace(".", "_")))
+                    target = srv if srv.endswith(".") else srv + "."
+                    srv_value = f"0 5 {mport or 3306} {target}"
+                    blocks.append({
+                        "type": "aws_route53_record", "name": rname,
+                        "attrs": {"zone_id": zone_id, "name": f"_service._tcp.{srv}",
+                                  "type": "SRV", "ttl": 300, "records": [srv_value]},
+                    })
 
     return blocks
 

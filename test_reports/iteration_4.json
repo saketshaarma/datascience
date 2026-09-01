@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 4 (admin-only delete, host:port uniqueness, CSV dedup, Terraform host-grouping, Inventory Export JSON) fully verified. Backend: 41/41 pytest tests pass (12 new tests added for iter 4). Frontend: verified role-gated UI on /inventory for admin vs member, main.tf.json download from Inventory Export JSON, and Generator flow still generates 68 resources.",
+  "backend_tests_added": [
+    "TestIter4AdminDelete: member DELETE /api/instances/{id} -> 403; member DELETE /api/instances?confirm=DELETE_ALL -> 403; admin single delete 200; admin delete-all 200",
+    "TestIter4HostPortUnique: duplicate host:port on POST -> 409; same host different port -> 200; PUT to another instance's host:port -> 409; PUT self with same host:port -> 200",
+    "TestIter4CsvDedup: re-importing /tmp/datatest.csv yields imported=0, skipped=5; within-file duplicate rows yield imported=2, skipped=1",
+    "TestIter4TerraformGrouping: two instances on host 10.0.0.5 (ports 3306 & 6379) produce exactly 1 aws_instance, 1 aws_security_group with ingress for BOTH ports, 2 A records referencing the SAME aws_instance, 2 SRV records each keyed to its own port (3306, 6379); ami sourced from inventory ami_id"
+  ],
+  "frontend_verified": [
+    "Admin on /inventory: export-csv-button, export-json-button, delete-all-button and per-row delete-{id} buttons all visible (5 rows -> 6 delete testids incl. delete-all).",
+    "export-json-button triggers browser download named 'main.tf.json' (verified via page.expect_download for both admin and member).",
+    "Member on /inventory (token swap via localStorage.if_token): delete-all-button count=0, per-row delete-* count=0, edit-* count=5, export-csv-button=1, export-json-button=1 (as required).",
+    "/generator: generate-tf-button renders HCL containing aws_instance; export-all-json-button and 'Generated 68 resources' toast confirmed."
+  ],
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/backend_test.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py _assert_unique_hostport: correctly excludes self by id on update; only enforces uniqueness when host is non-empty (blank hosts allowed multiple times, which is reasonable for placeholder rows).",
+    "server.py import_csv: dedups against both DB and within-file via a seen-set keyed by (host, port). Response shape {imported, skipped} is stable and consumed by CsvUpload.jsx.",
+    "terraform_generator._build_resources: groups by host so ONE aws_instance per host with SG ingress rules aggregated per distinct port; DNS A records all reference the single grouped instance; SRV records still carry the specific member's port. Behavior matches spec.",
+    "Inventory.jsx: isAdmin gating on delete-{id} and delete-all-button is correct; export buttons remain visible to members. exportJson() calls generateTerraform({resources:'all', output_format:'json'}) and downloads main.tf.json.",
+    "Carry-over (unchanged, non-blocking): brute-force lockout keyed on (ip,email) still; terraform _hcl_val doesn't escape embedded quotes/backslashes; server.py still uses deprecated @app.on_event.",
+    "Minor pytest deprecation warning: class-scoped fixtures defined as instance methods (PytestRemovedIn10Warning). Could be moved to @classmethod or module-level fixtures."
+  ],
+  "updated_files": ["/app/backend/tests/backend_test.py"],
+  "success_rate": {"backend": "100% (41/41)", "frontend": "100% (all iter-4 UI checks)"},
+  "test_credentials": "admin@infraforge.io / Admin@12345. UI-side throwaway member ui_member@infraforge.io/Member@123 was created via admin, used for hidden-delete check, then deleted. Backend tests use iter4_member@infraforge.io/Member@123 (deleted in-test).",
+  "seed_data_creation": "Wiped and re-imported /tmp/datatest.csv (5 hosts / 54 DNS / 4 SRV) after backend delete-all tests. Verified via /api/stats and Generator's 'Generated 68 resources' toast.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/backend_test.py -n 0 -v`. Iter 4 added 12 tests across TestIter4AdminDelete, TestIter4HostPortUnique, TestIter4CsvDedup, TestIter4TerraformGrouping (each class wipes+seeds its own state; safe alongside earlier suites). Frontend member-permission testing is done by admin-login → POST /api/auth/register → login as member → swap localStorage.if_token → reload /inventory; be sure to clean up the created member via DELETE /api/auth/users/{id} to keep the Team page clean.",
+  "rca of the issue": "n/a - no bugs found."
+}

@@ -104,7 +104,7 @@ export const InstanceForm = ({ open, onOpenChange, instance, onSaved }) => {
       onSaved();
       onOpenChange(false);
     } catch (e) {
-      toast.error("Save failed");
+      toast.error(e?.response?.data?.detail || "Save failed");
     } finally {
       setSaving(false);
     }

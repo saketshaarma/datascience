@@ -18,8 +18,9 @@ from typing import List, Optional, Literal
 from datetime import datetime, timezone
 
 import auth
-from auth import auth_router, get_current_user
+from auth import auth_router, get_current_user, require_admin
 from terraform_generator import generate_terraform
+from k8s_generator import generate_k8s, build_config_json
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
@@ -96,6 +97,39 @@ class TerraformRequest(BaseModel):
     default_instance_type: str = "t3.medium"
 
 
+class K8sNode(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    hostname: str = ""
+    instance_type: str = "t3.medium"
+    root_volume_size: int = 50
+
+
+class K8sClusterBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str = "cluster"
+    aws_region: str = "ap-south-1"
+    vpc_tag: str = ""
+    subnet_tag: str = ""
+    key_name: str = ""
+    private_zone_name: str = ""
+    ami_id: str = ""
+    security_group_tags: dict = Field(default_factory=dict)
+    instance_tags: dict = Field(default_factory=dict)
+    volume_tags: dict = Field(default_factory=dict)
+    nodes: List[K8sNode] = Field(default_factory=list)
+    extra: dict = Field(default_factory=dict)
+
+
+class K8sClusterCreate(K8sClusterBase):
+    pass
+
+
+class K8sCluster(K8sClusterBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
+
+
 # ----------------------------- Open -----------------------------
 @open_router.get("/")
 async def root():
@@ -163,8 +197,22 @@ async def get_instance(instance_id: str):
     return doc
 
 
+async def _assert_unique_hostport(host, port, exclude_id=None):
+    host = (host or "").strip()
+    if not host:
+        return
+    q = {"host": host, "port": port}
+    if exclude_id:
+        q["id"] = {"$ne": exclude_id}
+    if await db.instances.find_one(q):
+        label = f"{host}:{port}" if port is not None else host
+        raise HTTPException(status_code=409, detail=f"An instance with host {label} already exists")
+
+
+
 @api_router.post("/instances", response_model=Instance)
 async def create_instance(payload: InstanceCreate):
+    await _assert_unique_hostport(payload.host, payload.port)
     obj = Instance(**payload.model_dump())
     await db.instances.insert_one(obj.model_dump())
     return obj
@@ -175,6 +223,7 @@ async def update_instance(instance_id: str, payload: InstanceCreate):
     existing = await db.instances.find_one({"id": instance_id}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Instance not found")
+    await _assert_unique_hostport(payload.host, payload.port, exclude_id=instance_id)
     data = payload.model_dump()
     data["updated_at"] = now_iso()
     await db.instances.update_one({"id": instance_id}, {"$set": data})
@@ -182,7 +231,7 @@ async def update_instance(instance_id: str, payload: InstanceCreate):
 
 
 @api_router.delete("/instances/{instance_id}")
-async def delete_instance(instance_id: str):
+async def delete_instance(instance_id: str, current=Depends(require_admin)):
     res = await db.instances.delete_one({"id": instance_id})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Instance not found")
@@ -190,7 +239,7 @@ async def delete_instance(instance_id: str):
 
 
 @api_router.delete("/instances")
-async def delete_all_instances(confirm: str = ""):
+async def delete_all_instances(confirm: str = "", current=Depends(require_admin)):
     if confirm != "DELETE_ALL":
         raise HTTPException(status_code=400, detail="Confirmation required")
     res = await db.instances.delete_many({})
@@ -307,9 +356,22 @@ async def import_csv(file: UploadFile = File(...)):
         ins["dns_records"] = list(dict.fromkeys(ins["dns_records"]))
         ins["srv_records"] = list(dict.fromkeys(ins["srv_records"]))
 
-    if instances:
-        await db.instances.insert_many(instances)
-    return {"imported": len(instances)}
+    # enforce unique host:port — skip combos that already exist in DB or repeat in-file
+    existing = await db.instances.find({}, {"_id": 0, "host": 1, "port": 1}).to_list(10000)
+    seen = {(e.get("host"), e.get("port")) for e in existing}
+    to_insert, skipped = [], 0
+    for ins in instances:
+        key = (ins.get("host"), ins.get("port"))
+        if ins.get("host") and key in seen:
+            skipped += 1
+            continue
+        if ins.get("host"):
+            seen.add(key)
+        to_insert.append(ins)
+
+    if to_insert:
+        await db.instances.insert_many(to_insert)
+    return {"imported": len(to_insert), "skipped": skipped}
 
 
 @api_router.post("/terraform/generate")
@@ -323,6 +385,61 @@ async def terraform_generate(req: TerraformRequest):
         zone_id=req.zone_id, default_ami=req.default_ami,
         default_instance_type=req.default_instance_type, dns_target=req.dns_target,
     )
+
+
+@api_router.get("/k8s/clusters", response_model=List[K8sCluster])
+async def list_clusters():
+    docs = await db.k8s_clusters.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return docs
+
+
+@api_router.post("/k8s/clusters", response_model=K8sCluster)
+async def create_cluster(payload: K8sClusterCreate):
+    obj = K8sCluster(**payload.model_dump())
+    await db.k8s_clusters.insert_one(obj.model_dump())
+    return obj
+
+
+@api_router.get("/k8s/clusters/{cluster_id}", response_model=K8sCluster)
+async def get_cluster(cluster_id: str):
+    doc = await db.k8s_clusters.find_one({"id": cluster_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    return doc
+
+
+@api_router.put("/k8s/clusters/{cluster_id}", response_model=K8sCluster)
+async def update_cluster(cluster_id: str, payload: K8sClusterCreate):
+    existing = await db.k8s_clusters.find_one({"id": cluster_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    data = payload.model_dump()
+    data["updated_at"] = now_iso()
+    await db.k8s_clusters.update_one({"id": cluster_id}, {"$set": data})
+    return await db.k8s_clusters.find_one({"id": cluster_id}, {"_id": 0})
+
+
+@api_router.delete("/k8s/clusters/{cluster_id}")
+async def delete_cluster(cluster_id: str, current=Depends(require_admin)):
+    res = await db.k8s_clusters.delete_one({"id": cluster_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    return {"deleted": True}
+
+
+@api_router.post("/k8s/clusters/{cluster_id}/generate")
+async def generate_cluster(cluster_id: str):
+    doc = await db.k8s_clusters.find_one({"id": cluster_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Cluster not found")
+    return generate_k8s(doc)
+
+
+@api_router.post("/k8s/preview")
+async def preview_cluster(payload: K8sClusterCreate):
+    """Generate config JSON + Terraform from an unsaved cluster spec."""
+    return generate_k8s(payload.model_dump())
+
 
 
 app.include_router(auth_router)

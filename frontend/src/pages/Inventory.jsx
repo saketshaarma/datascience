@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Plus, Upload, Search, Pencil, Trash2, Server, Download, Trash } from "lucide-react";
+import { Plus, Upload, Search, Pencil, Trash2, Server, Download, Trash, FileJson } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,8 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { InstanceForm } from "@/components/InstanceForm";
 import { CsvUpload } from "@/components/CsvUpload";
-import { getInstances, deleteInstance, deleteAllInstances, downloadCsv } from "@/lib/api";
+import { getInstances, deleteInstance, deleteAllInstances, downloadCsv, generateTerraform } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 
 const roleColor = (r) => {
@@ -21,6 +22,8 @@ const roleColor = (r) => {
 };
 
 export default function Inventory() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [items, setItems] = useState([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
@@ -75,6 +78,31 @@ export default function Inventory() {
     }
   };
 
+  const doExportJson = async () => {
+    if (items.length === 0) {
+      toast.error("Nothing to export");
+      return;
+    }
+    try {
+      const res = await generateTerraform({
+        instance_ids: null,
+        resources: ["ec2", "dns", "srv", "sg"],
+        output_format: "json",
+        dns_target: "instance_private",
+      });
+      const blob = new Blob([res.json || ""], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "main.tf.json";
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${res.resource_count} resources as JSON`);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "JSON export failed");
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -88,7 +116,15 @@ export default function Inventory() {
               onClick={doExport}
               className="border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm gap-2"
             >
-              <Download className="h-4 w-4" /> Export
+              <Download className="h-4 w-4" /> Export CSV
+            </Button>
+            <Button
+              data-testid="export-json-button"
+              variant="outline"
+              onClick={doExportJson}
+              className="border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm gap-2"
+            >
+              <FileJson className="h-4 w-4" /> Export JSON
             </Button>
             <Button
               data-testid="open-csv-upload"
@@ -181,13 +217,15 @@ export default function Inventory() {
                         >
                           <Pencil className="h-4 w-4" />
                         </button>
-                        <button
-                          data-testid={`delete-${it.id}`}
-                          onClick={() => setToDelete(it)}
-                          className="p-1.5 rounded-sm text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors duration-150"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </button>
+                        {isAdmin && (
+                          <button
+                            data-testid={`delete-${it.id}`}
+                            onClick={() => setToDelete(it)}
+                            className="p-1.5 rounded-sm text-zinc-500 hover:text-red-400 hover:bg-red-500/10 transition-colors duration-150"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -198,7 +236,7 @@ export default function Inventory() {
         </div>
         <div className="flex items-center justify-between">
           <p className="text-xs text-zinc-600 font-mono">{items.length} instance(s)</p>
-          {items.length > 0 && (
+          {items.length > 0 && isAdmin && (
             <button
               data-testid="delete-all-button"
               onClick={() => setWipeOpen(true)}

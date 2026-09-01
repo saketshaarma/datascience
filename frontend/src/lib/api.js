@@ -73,4 +73,11 @@ export const downloadCsv = async () => {
 export const generateTerraform = (payload) =>
   client.post("/terraform/generate", payload).then((r) => r.data);
 
+// k8s clusters
+export const listClusters = () => client.get("/k8s/clusters").then((r) => r.data);
+export const createCluster = (data) => client.post("/k8s/clusters", data).then((r) => r.data);
+export const updateCluster = (id, data) => client.put(`/k8s/clusters/${id}`, data).then((r) => r.data);
+export const deleteCluster = (id) => client.delete(`/k8s/clusters/${id}`).then((r) => r.data);
+export const previewCluster = (data) => client.post("/k8s/preview", data).then((r) => r.data);
+
 export default client;

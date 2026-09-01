@@ -1,5 +1,5 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Server, Globe, FileCode2, Boxes, Users, LogOut } from "lucide-react";
+import { LayoutDashboard, Server, Globe, FileCode2, Boxes, Users, LogOut, Ship } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 const nav = [
@@ -7,6 +7,7 @@ const nav = [
   { to: "/inventory", label: "Inventory", icon: Server, id: "nav-inventory" },
   { to: "/dns", label: "DNS & SRV", icon: Globe, id: "nav-dns" },
   { to: "/generator", label: "Terraform", icon: FileCode2, id: "nav-generator" },
+  { to: "/kubernetes", label: "Kubernetes", icon: Ship, id: "nav-kubernetes" },
   { to: "/team", label: "Team", icon: Users, id: "nav-team" },
 ];
 

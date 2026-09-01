@@ -22,7 +22,10 @@ export const CsvUpload = ({ open, onOpenChange, onImported }) => {
     setBusy(true);
     try {
       const res = await importCsv(file);
-      toast.success(`Imported ${res.imported} instances`);
+      const msg = res.skipped
+        ? `Imported ${res.imported} instances (${res.skipped} duplicate host:port skipped)`
+        : `Imported ${res.imported} instances`;
+      toast.success(msg);
       setFile(null);
       onImported();
       onOpenChange(false);

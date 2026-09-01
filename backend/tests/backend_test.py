@@ -353,3 +353,225 @@ class TestTerraformDnsTarget:
         assert "aws_instance" in parsed["resource"]
         assert "aws_route53_record" in parsed["resource"]
         assert "aws_security_group" in parsed["resource"]
+
+
+
+# ----------------- Iteration 4: Admin-only delete + host:port uniqueness + grouping -----------------
+@pytest.fixture(scope="module")
+def member_token(admin_client):
+    """Create (or refresh) a throwaway member and return an access token."""
+    # cleanup
+    r = admin_client.get(f"{API}/auth/users")
+    for u in r.json():
+        if u["email"] == "iter4_member@infraforge.io":
+            admin_client.delete(f"{API}/auth/users/{u['id']}")
+    r = admin_client.post(f"{API}/auth/register", json={
+        "email": "iter4_member@infraforge.io", "password": "Member@123", "name": "Iter4 Member"})
+    assert r.status_code == 200, r.text
+    login = requests.post(f"{API}/auth/login",
+                          json={"email": "iter4_member@infraforge.io", "password": "Member@123"})
+    assert login.status_code == 200
+    return login.json()["access_token"]
+
+
+class TestIter4AdminDelete:
+    """Only admin can delete single/all; members get 403."""
+
+    @pytest.fixture(scope="class", autouse=True)
+    def _clean(self, admin_client):
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+        yield
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+
+    def _seed(self, admin_client, host="10.0.9.1", port=3306):
+        r = admin_client.post(f"{API}/instances", json={
+            "instance_name": "TEST_del", "host": host, "port": port, "ec2_instance_type": "t3.medium",
+            "ami_id": "ami-x",
+        })
+        assert r.status_code == 200, r.text
+        return r.json()["id"]
+
+    def test_member_delete_single_forbidden(self, admin_client, member_token):
+        iid = self._seed(admin_client, "10.0.9.10", 3306)
+        r = requests.delete(f"{API}/instances/{iid}",
+                            headers={"Authorization": f"Bearer {member_token}"})
+        assert r.status_code == 403
+        # still exists
+        assert admin_client.get(f"{API}/instances/{iid}").status_code == 200
+
+    def test_member_delete_all_forbidden(self, member_token):
+        r = requests.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"},
+                            headers={"Authorization": f"Bearer {member_token}"})
+        assert r.status_code == 403
+
+    def test_admin_delete_single_ok(self, admin_client):
+        iid = self._seed(admin_client, "10.0.9.11", 3306)
+        r = admin_client.delete(f"{API}/instances/{iid}")
+        assert r.status_code == 200
+        assert admin_client.get(f"{API}/instances/{iid}").status_code == 404
+
+    def test_admin_delete_all_ok(self, admin_client):
+        self._seed(admin_client, "10.0.9.12", 3306)
+        self._seed(admin_client, "10.0.9.13", 3306)
+        r = admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+        assert r.status_code == 200
+        assert admin_client.get(f"{API}/instances").json() == []
+
+
+class TestIter4HostPortUnique:
+    """Host:port must be unique on create/update; same host different port OK."""
+
+    @pytest.fixture(scope="class", autouse=True)
+    def _clean(self, admin_client):
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+        yield
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+
+    def test_create_duplicate_409(self, admin_client):
+        p = {"instance_name": "A", "host": "10.0.7.7", "port": 3306,
+             "ec2_instance_type": "t3.medium", "ami_id": "ami-x"}
+        r1 = admin_client.post(f"{API}/instances", json=p)
+        assert r1.status_code == 200
+        r2 = admin_client.post(f"{API}/instances", json={**p, "instance_name": "B"})
+        assert r2.status_code == 409
+        assert "already exists" in r2.json()["detail"].lower()
+
+    def test_same_host_different_port_ok(self, admin_client):
+        r = admin_client.post(f"{API}/instances", json={
+            "instance_name": "C", "host": "10.0.7.7", "port": 6379,
+            "ec2_instance_type": "t3.medium", "ami_id": "ami-x"})
+        assert r.status_code == 200
+
+    def test_update_conflict_409(self, admin_client):
+        # add third distinct host/port
+        r = admin_client.post(f"{API}/instances", json={
+            "instance_name": "D", "host": "10.0.7.8", "port": 3306,
+            "ec2_instance_type": "t3.medium", "ami_id": "ami-x"})
+        assert r.status_code == 200
+        did = r.json()["id"]
+        # try to update D to (10.0.7.7, 3306) - which A owns -> 409
+        u = admin_client.put(f"{API}/instances/{did}", json={
+            "instance_name": "D", "host": "10.0.7.7", "port": 3306,
+            "ec2_instance_type": "t3.medium", "ami_id": "ami-x"})
+        assert u.status_code == 409
+
+    def test_update_self_same_hostport_ok(self, admin_client):
+        # find A and update it with same host:port -> should not conflict
+        lst = admin_client.get(f"{API}/instances").json()
+        a = next(i for i in lst if i["host"] == "10.0.7.7" and i["port"] == 3306)
+        u = admin_client.put(f"{API}/instances/{a['id']}", json={
+            "instance_name": "A2", "host": "10.0.7.7", "port": 3306,
+            "ec2_instance_type": "t3.medium", "ami_id": "ami-x"})
+        assert u.status_code == 200
+
+
+class TestIter4CsvDedup:
+    """Re-importing same CSV should skip duplicates and report count."""
+
+    @pytest.fixture(scope="class", autouse=True)
+    def _clean(self, admin_client):
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+        yield
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+
+    def test_first_import_then_reimport_skips(self, admin_client):
+        with open(CSV_PATH, "rb") as f:
+            r1 = admin_client.post(f"{API}/instances/import-csv",
+                                   files={"file": ("datatest.csv", f, "text/csv")})
+        assert r1.status_code == 200, r1.text
+        body1 = r1.json()
+        assert body1["imported"] == 5
+        assert body1.get("skipped", 0) == 0
+        # reimport - all should skip
+        with open(CSV_PATH, "rb") as f:
+            r2 = admin_client.post(f"{API}/instances/import-csv",
+                                   files={"file": ("datatest.csv", f, "text/csv")})
+        assert r2.status_code == 200, r2.text
+        body2 = r2.json()
+        assert body2["imported"] == 0
+        assert body2["skipped"] == 5
+
+    def test_within_file_dedup(self, admin_client):
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+        csv_body = (
+            "Id,InstanceName,Host_Port,Instance Type,ALL_DNS,SRV\n"
+            "1,alpha,10.0.8.1:3306,t3.medium,a.example.com,\n"
+            "2,alpha_dup,10.0.8.1:3306,t3.medium,b.example.com,\n"
+            "3,beta,10.0.8.2:3306,t3.medium,c.example.com,\n"
+        )
+        r = admin_client.post(f"{API}/instances/import-csv",
+                              files={"file": ("dup.csv", csv_body.encode(), "text/csv")})
+        assert r.status_code == 200, r.text
+        b = r.json()
+        assert b["imported"] == 2
+        assert b["skipped"] == 1
+
+
+class TestIter4TerraformGrouping:
+    """One host with multiple ports -> one aws_instance, one SG w/ multi ingress,
+    DNS aggregated referencing the single instance, SRV keyed to own port."""
+
+    @pytest.fixture(scope="class", autouse=True)
+    def _seed(self, admin_client):
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+        # mysql
+        r1 = admin_client.post(f"{API}/instances", json={
+            "instance_name": "db-mysql", "host": "10.0.0.5", "port": 3306,
+            "ec2_instance_type": "t3.medium", "ami_id": "ami-shared",
+            "dns_records": ["db.example.com"],
+            "srv_records": ["_mysql._tcp.example.com"],
+        })
+        assert r1.status_code == 200, r1.text
+        # redis (same host, different port)
+        r2 = admin_client.post(f"{API}/instances", json={
+            "instance_name": "db-redis", "host": "10.0.0.5", "port": 6379,
+            "ec2_instance_type": "t3.medium", "ami_id": "ami-shared",
+            "dns_records": ["cache.example.com"],
+            "srv_records": ["_redis._tcp.example.com"],
+        })
+        assert r2.status_code == 200, r2.text
+        yield
+        admin_client.delete(f"{API}/instances", params={"confirm": "DELETE_ALL"})
+
+    def test_grouping_produces_single_ec2_and_sg(self, admin_client):
+        r = admin_client.post(f"{API}/terraform/generate", json={
+            "resources": ["ec2", "dns", "srv", "sg"], "output_format": "both",
+            "dns_target": "instance_private",
+        })
+        assert r.status_code == 200, r.text
+        parsed = json.loads(r.json()["json"])
+        insts = parsed["resource"]["aws_instance"]
+        sgs = parsed["resource"]["aws_security_group"]
+        assert len(insts) == 1, f"expected 1 aws_instance, got {list(insts.keys())}"
+        assert len(sgs) == 1, f"expected 1 aws_security_group, got {list(sgs.keys())}"
+        # SG must contain ingress rules for BOTH ports
+        sg = list(sgs.values())[0]
+        ports = sorted({(ing["from_port"], ing["to_port"]) for ing in sg["ingress"]})
+        assert (3306, 3306) in ports and (6379, 6379) in ports, f"ports={ports}"
+
+    def test_dns_aggregated_and_ref_single_instance(self, admin_client):
+        r = admin_client.post(f"{API}/terraform/generate", json={
+            "resources": ["ec2", "dns", "srv", "sg"], "output_format": "both",
+            "dns_target": "instance_private",
+        })
+        parsed = json.loads(r.json()["json"])
+        recs = parsed["resource"]["aws_route53_record"]
+        a_records = [v for v in recs.values() if v["type"] == "A"]
+        srv_records = [v for v in recs.values() if v["type"] == "SRV"]
+        # Both A records reference the SAME single aws_instance
+        assert len(a_records) == 2
+        for a in a_records:
+            assert a["records"] == ["${aws_instance.ec2_db_mysql_10_0_0_5.private_ip}"] \
+                or a["records"] == ["${aws_instance.ec2_db_redis_10_0_0_5.private_ip}"]
+        # They should reference the SAME instance name
+        refs = {a["records"][0] for a in a_records}
+        assert len(refs) == 1, f"A records reference more than one instance: {refs}"
+        # SRV: each keyed to its own port
+        srv_ports = sorted(int(s["records"][0].split()[2]) for s in srv_records)
+        assert srv_ports == [3306, 6379], f"SRV ports={srv_ports}"
+
+    def test_ec2_ami_from_inventory(self, admin_client):
+        r = admin_client.post(f"{API}/terraform/generate", json={
+            "resources": ["ec2"], "output_format": "hcl", "dns_target": "instance_private",
+        })
+        assert 'ami = "ami-shared"' in r.json()["hcl"]
