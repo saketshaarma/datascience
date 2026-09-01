@@ -1,28 +1,19 @@
-"""Generate the K8s cluster config JSON and provisioning Terraform (HCL)."""
+"""Generate the K8s cluster spec JSON + a MODULAR Terraform project.
+
+Output files:
+  cluster.json           - the cluster spec (nodes keyed node1..nodeN)
+  provider.tf            - terraform + provider blocks
+  variables.tf           - variable declarations
+  main.tf                - data sources + resources (for_each over var.nodes)
+  outputs.tf             - useful outputs
+  terraform.tfvars.json  - variable values for this cluster
+  userdata.sh.tpl        - per-node bootstrap template
+"""
 import json
-import re
-
-
-def _esc(v):
-    return str(v).replace("\\", "\\\\").replace('"', '\\"')
-
-
-def _ident(v):
-    raw = re.sub(r"[^a-zA-Z0-9_]+", "_", str(v)).strip("_").lower() or "node"
-    if raw[0].isdigit():
-        raw = "n_" + raw
-    return raw
-
-
-def _tag_key(k):
-    # HCL map keys with special chars must be quoted; keep simple keys bare
-    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", str(k)):
-        return str(k)
-    return f'"{_esc(k)}"'
 
 
 def build_config_json(doc: dict) -> dict:
-    """Return the exact cluster config JSON structure."""
+    """The cluster spec JSON (nodes keyed node1, node2, ...)."""
     nodes = {}
     for i, n in enumerate(doc.get("nodes", []), start=1):
         nodes[f"node{i}"] = {
@@ -46,125 +37,245 @@ def build_config_json(doc: dict) -> dict:
     return cfg
 
 
-def _hcl_map(d: dict, indent: str) -> str:
-    if not d:
-        return "{}"
-    lines = ["{"]
-    for k, v in d.items():
-        lines.append(f'{indent}  {_tag_key(k)} = "{_esc(v)}"')
-    lines.append(indent + "}")
-    return "\n".join(lines)
+def build_tfvars(doc: dict) -> dict:
+    """Variable values consumed by variables.tf (terraform.tfvars.json)."""
+    cfg = build_config_json(doc)
+    tfvars = {
+        "cluster_name": doc.get("name", "k8s-cluster"),
+        "aws_region": cfg["aws_region"],
+        "ami_id": doc.get("ami_id", ""),
+        "key_name": cfg["key_name"],
+        "vpc_tag": cfg["vpc_tag"],
+        "subnet_tag": cfg["subnet_tag"],
+        "private_zone_name": cfg["private_zone_name"],
+        "security_group_tags": cfg["security_group_tags"],
+        "instance_tags": cfg["instance_tags"],
+        "volume_tags": cfg["volume_tags"],
+        "nodes": cfg["nodes"],
+    }
+    for k, v in (doc.get("extra") or {}).items():
+        tfvars[k] = v
+    return tfvars
 
 
-def build_terraform_hcl(doc: dict) -> str:
-    name = doc.get("name") or "k8s"
-    slug = _ident(name)
-    region = doc.get("aws_region") or "us-east-1"
-    vpc_tag = doc.get("vpc_tag") or ""
-    subnet_tag = doc.get("subnet_tag") or ""
-    key_name = doc.get("key_name") or ""
-    zone = doc.get("private_zone_name") or ""
-    sg_tags = doc.get("security_group_tags") or {}
-    inst_tags = doc.get("instance_tags") or {}
-    vol_tags = doc.get("volume_tags") or {}
-    ami = doc.get("ami_id") or ""
-    nodes = doc.get("nodes") or []
+PROVIDER_TF = '''terraform {
+  required_version = ">= 1.3.0"
 
-    out = []
-    out.append(
-        'terraform {\n  required_providers {\n    aws = {\n'
-        '      source  = "hashicorp/aws"\n      version = "~> 5.0"\n    }\n  }\n}\n'
-    )
-    out.append(f'provider "aws" {{\n  region = "{_esc(region)}"\n}}\n')
-    out.append(f'variable "ami_id" {{\n  type    = string\n  default = "{_esc(ami)}"\n}}\n')
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0"
+    }
+  }
+}
 
-    out.append(
-        "locals {\n"
-        f"  instance_tags       = {_hcl_map(inst_tags, '  ')}\n"
-        f"  volume_tags         = {_hcl_map(vol_tags, '  ')}\n"
-        f"  security_group_tags = {_hcl_map(sg_tags, '  ')}\n"
-        "}\n"
-    )
+provider "aws" {
+  region = var.aws_region
+}
+'''
 
-    if vpc_tag:
-        out.append(
-            'data "aws_vpc" "selected" {\n'
-            f'  tags = {{\n    Name = "{_esc(vpc_tag)}"\n  }}\n}}\n'
-        )
-    if subnet_tag:
-        out.append(
-            'data "aws_subnet" "selected" {\n'
-            f'  tags = {{\n    Name = "{_esc(subnet_tag)}"\n  }}\n}}\n'
-        )
-    if zone:
-        out.append(
-            'data "aws_route53_zone" "private" {\n'
-            f'  name         = "{_esc(zone)}"\n  private_zone = true\n}}\n'
-        )
+VARIABLES_TF = '''variable "cluster_name" {
+  description = "Logical name of the cluster (used for the security group)"
+  type        = string
+}
 
-    vpc_ref = "data.aws_vpc.selected.id" if vpc_tag else '""'
-    subnet_ref = "data.aws_subnet.selected.id" if subnet_tag else '""'
+variable "aws_region" {
+  description = "AWS region to deploy into"
+  type        = string
+}
 
-    # security group
-    sg_lines = [f'resource "aws_security_group" "{slug}_sg" {{']
-    sg_lines.append(f'  name = "{_esc(name)}-sg"')
-    if vpc_tag:
-        sg_lines.append(f"  vpc_id = {vpc_ref}")
-    sg_lines.append("  ingress {")
-    sg_lines.append("    description = \"intra-cluster\"")
-    sg_lines.append("    from_port   = 0")
-    sg_lines.append("    to_port     = 0")
-    sg_lines.append('    protocol    = "-1"')
-    sg_lines.append("    self        = true")
-    sg_lines.append("  }")
-    sg_lines.append("  egress {")
-    sg_lines.append("    from_port   = 0")
-    sg_lines.append("    to_port     = 0")
-    sg_lines.append('    protocol    = "-1"')
-    sg_lines.append('    cidr_blocks = ["0.0.0.0/0"]')
-    sg_lines.append("  }")
-    sg_lines.append(f'  tags = merge(local.security_group_tags, {{ Name = "{_esc(name)}-sg" }})')
-    sg_lines.append("}\n")
-    out.append("\n".join(sg_lines))
+variable "ami_id" {
+  description = "AMI used for every node"
+  type        = string
+}
 
-    # nodes
-    for i, n in enumerate(nodes, start=1):
-        rname = f"node{i}"
-        hostname = n.get("hostname") or rname
-        itype = n.get("instance_type") or "t3.medium"
-        vsize = int(n.get("root_volume_size") or 50)
-        lines = [f'resource "aws_instance" "{rname}" {{']
-        lines.append("  ami           = var.ami_id")
-        lines.append(f'  instance_type = "{_esc(itype)}"')
-        if key_name:
-            lines.append(f'  key_name      = "{_esc(key_name)}"')
-        if subnet_tag:
-            lines.append(f"  subnet_id     = {subnet_ref}")
-        lines.append(f"  vpc_security_group_ids = [aws_security_group.{slug}_sg.id]")
-        lines.append("  root_block_device {")
-        lines.append(f"    volume_size = {vsize}")
-        lines.append('    volume_type = "gp3"')
-        lines.append(f'    tags        = merge(local.volume_tags, {{ Name = "{_esc(hostname)}-root" }})')
-        lines.append("  }")
-        lines.append(f'  tags = merge(local.instance_tags, {{ Name = "{_esc(hostname)}" }})')
-        lines.append("}\n")
-        out.append("\n".join(lines))
+variable "key_name" {
+  description = "EC2 key pair name"
+  type        = string
+  default     = ""
+}
 
-        if zone:
-            r = [f'resource "aws_route53_record" "{rname}_dns" {{']
-            r.append("  zone_id = data.aws_route53_zone.private.zone_id")
-            r.append(f'  name    = "{_esc(hostname)}.{_esc(zone)}"')
-            r.append('  type    = "A"')
-            r.append("  ttl     = 300")
-            r.append(f"  records = [aws_instance.{rname}.private_ip]")
-            r.append("}\n")
-            out.append("\n".join(r))
+variable "vpc_tag" {
+  description = "Value of the Name tag used to look up the target VPC"
+  type        = string
+}
 
-    return "\n".join(out)
+variable "subnet_tag" {
+  description = "Value of the Name tag used to look up the target subnet"
+  type        = string
+}
+
+variable "private_zone_name" {
+  description = "Route53 private hosted zone name"
+  type        = string
+}
+
+variable "security_group_tags" {
+  description = "Tags applied to the cluster security group"
+  type        = map(string)
+  default     = {}
+}
+
+variable "instance_tags" {
+  description = "Tags applied to every node instance"
+  type        = map(string)
+  default     = {}
+}
+
+variable "volume_tags" {
+  description = "Tags applied to every root volume"
+  type        = map(string)
+  default     = {}
+}
+
+variable "nodes" {
+  description = "Map of nodes to provision"
+  type = map(object({
+    hostname         = string
+    instance_type    = string
+    root_volume_size = number
+  }))
+}
+'''
+
+MAIN_TF = '''data "aws_vpc" "selected" {
+  tags = {
+    Name = var.vpc_tag
+  }
+}
+
+data "aws_subnet" "selected" {
+  tags = {
+    Name = var.subnet_tag
+  }
+}
+
+data "aws_route53_zone" "private" {
+  name         = var.private_zone_name
+  private_zone = true
+}
+
+resource "aws_security_group" "cluster" {
+  name        = "${var.cluster_name}-sg"
+  description = "Security group for ${var.cluster_name} cluster nodes"
+  vpc_id      = data.aws_vpc.selected.id
+
+  ingress {
+    description = "Intra-cluster traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    self        = true
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(var.security_group_tags, {
+    Name = "${var.cluster_name}-sg"
+  })
+}
+
+resource "aws_instance" "node" {
+  for_each = var.nodes
+
+  ami                    = var.ami_id
+  instance_type          = each.value.instance_type
+  key_name               = var.key_name != "" ? var.key_name : null
+  subnet_id              = data.aws_subnet.selected.id
+  vpc_security_group_ids = [aws_security_group.cluster.id]
+
+  user_data = templatefile("${path.module}/userdata.sh.tpl", {
+    hostname     = each.value.hostname
+    cluster_name = var.cluster_name
+  })
+
+  root_block_device {
+    volume_size = each.value.root_volume_size
+    volume_type = "gp3"
+    tags = merge(var.volume_tags, {
+      Name = "${each.value.hostname}-root"
+    })
+  }
+
+  tags = merge(var.instance_tags, {
+    Name = each.value.hostname
+  })
+}
+
+resource "aws_route53_record" "node" {
+  for_each = var.nodes
+
+  zone_id = data.aws_route53_zone.private.zone_id
+  name    = "${each.value.hostname}.${var.private_zone_name}"
+  type    = "A"
+  ttl     = 300
+  records = [aws_instance.node[each.key].private_ip]
+}
+'''
+
+OUTPUTS_TF = '''output "instance_ids" {
+  description = "Map of node key => EC2 instance id"
+  value       = { for k, n in aws_instance.node : k => n.id }
+}
+
+output "private_ips" {
+  description = "Map of node key => private IP"
+  value       = { for k, n in aws_instance.node : k => n.private_ip }
+}
+
+output "node_fqdns" {
+  description = "Map of node key => private DNS FQDN"
+  value       = { for k, r in aws_route53_record.node : k => r.fqdn }
+}
+
+output "security_group_id" {
+  description = "Cluster security group id"
+  value       = aws_security_group.cluster.id
+}
+'''
+
+USERDATA_TPL = '''#!/bin/bash
+set -euo pipefail
+
+# Bootstrap for Kubernetes node: ${hostname} (cluster: ${cluster_name})
+hostnamectl set-hostname "${hostname}"
+echo "127.0.0.1 ${hostname}" >> /etc/hosts
+
+# Base packages
+if command -v apt-get >/dev/null 2>&1; then
+  apt-get update -y
+  apt-get install -y apt-transport-https ca-certificates curl gnupg
+else
+  yum install -y ca-certificates curl
+fi
+
+# Kernel prerequisites for kubelet / containerd
+cat <<EOF >/etc/sysctl.d/k8s.conf
+net.bridge.bridge-nf-call-iptables  = 1
+net.ipv4.ip_forward                 = 1
+EOF
+sysctl --system || true
+
+# TODO: install containerd, kubeadm, kubelet & kubectl and join/init the cluster.
+echo "userdata bootstrap complete for ${hostname}"
+'''
 
 
 def generate_k8s(doc: dict) -> dict:
+    files = {
+        "provider.tf": PROVIDER_TF,
+        "variables.tf": VARIABLES_TF,
+        "main.tf": MAIN_TF,
+        "outputs.tf": OUTPUTS_TF,
+        "terraform.tfvars.json": json.dumps(build_tfvars(doc), indent=2),
+        "userdata.sh.tpl": USERDATA_TPL,
+    }
     return {
         "config_json": json.dumps(build_config_json(doc), indent=2),
-        "hcl": build_terraform_hcl(doc),
+        "files": files,
     }

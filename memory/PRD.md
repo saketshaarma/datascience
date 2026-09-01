@@ -81,3 +81,7 @@ infrastructure. Acts as the central source of truth for DevOps/Infrastructure te
 - **Excel (.xlsx) import**: auto-creates missing services, maps known columns, turns any extra columns into metadata attributes, skips duplicate aws_instance_id; returns `{imported, skipped}`.
 - **JSON export** in the exact relational shape (`db_services` / `db_instances` / `db_instance_metadata`) with integer ids and FK references.
 - Backend: `db_config.py` (`/api/db/*`), openpyxl added. Tested: 17/17 backend, 100% frontend.
+
+## Implemented (2026-06) — Iteration 7 & 8
+- **Kubernetes page redesigned as a 4-step wizard** (Cluster → Tags → Nodes → Review) with a progress stepper, framer-motion transitions, key-value tag editors, node cards with controller/etcd/worker presets, and a review summary. Tested 100% frontend.
+- **Modular Terraform output**: the K8s generator now emits a full project instead of a flat file — `provider.tf`, `variables.tf`, `main.tf` (data sources + `for_each` over `var.nodes` + `templatefile` userdata), `outputs.tf`, `terraform.tfvars.json` (all values incl. cluster_name/ami/tags/nodes), and `userdata.sh.tpl` — plus the `cluster.json` spec. Wizard shows each file in its own tab with copy/download and a "Download all" action.

@@ -194,6 +194,28 @@ export default function Kubernetes() {
   const back = () => setStep((s) => Math.max(s - 1, 0));
   const progress = ((step + 1) / STEPS.length) * 100;
 
+  const fileList = result
+    ? [
+        { name: "cluster.json", content: result.config_json || "" },
+        ...Object.entries(result.files || {}).map(([name, content]) => ({ name, content })),
+      ]
+    : [];
+
+  const downloadAll = () => {
+    fileList.forEach((f, i) => {
+      setTimeout(() => {
+        const blob = new Blob([f.content], { type: "text/plain" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = f.name;
+        a.click();
+        URL.revokeObjectURL(url);
+      }, i * 250);
+    });
+    toast.success(`Downloading ${fileList.length} files`);
+  };
+
   return (
     <div>
       <PageHeader
@@ -383,18 +405,32 @@ export default function Kubernetes() {
                   </Button>
 
                   {result && (
-                    <Tabs defaultValue="json" className="mt-4">
-                      <TabsList className="bg-[#09090B] border border-[#27272A] rounded-sm">
-                        <TabsTrigger value="json" data-testid="k8s-tab-json" className="data-[state=active]:bg-orange-500 data-[state=active]:text-white rounded-sm">cluster.json</TabsTrigger>
-                        <TabsTrigger value="hcl" data-testid="k8s-tab-hcl" className="data-[state=active]:bg-orange-500 data-[state=active]:text-white rounded-sm">main.tf (HCL)</TabsTrigger>
-                      </TabsList>
-                      <TabsContent value="json" className="mt-3">
-                        <CodeBlock code={result.config_json || ""} language="json" filename="cluster.json" />
-                      </TabsContent>
-                      <TabsContent value="hcl" className="mt-3">
-                        <CodeBlock code={result.hcl || ""} language="hcl" filename="main.tf" />
-                      </TabsContent>
-                    </Tabs>
+                    <div className="mt-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs text-zinc-500 font-mono">
+                          Modular Terraform project · {Object.keys(result.files || {}).length + 1} files
+                        </span>
+                        <Button data-testid="k8s-download-all" onClick={downloadAll} variant="outline"
+                          className="border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm gap-2 h-8 text-xs">
+                          <Save className="h-3.5 w-3.5" /> Download all
+                        </Button>
+                      </div>
+                      <Tabs defaultValue="cluster.json">
+                        <TabsList className="bg-[#09090B] border border-[#27272A] rounded-sm flex-wrap h-auto">
+                          {fileList.map((f) => (
+                            <TabsTrigger key={f.name} value={f.name} data-testid={`k8s-tab-${f.name}`}
+                              className="data-[state=active]:bg-orange-500 data-[state=active]:text-white rounded-sm text-xs">
+                              {f.name}
+                            </TabsTrigger>
+                          ))}
+                        </TabsList>
+                        {fileList.map((f) => (
+                          <TabsContent key={f.name} value={f.name} className="mt-3">
+                            <CodeBlock code={f.content} language={f.name.endsWith(".json") ? "json" : "hcl"} filename={f.name} />
+                          </TabsContent>
+                        ))}
+                      </Tabs>
+                    </div>
                   )}
                 </div>
               )}
