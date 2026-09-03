@@ -351,6 +351,41 @@ async def save_aws_settings(payload: AwsSettings, current=Depends(require_admin)
     return {"ok": True, "configured": bool(doc["access_key_id"]), "use_live": doc["use_live"]}
 
 
+def _test_connection_sync(access_key, secret, region):
+    session = _new_session(access_key, secret, region)
+    cfg = _boto_cfg()
+    ident = session.client("sts", config=cfg).get_caller_identity()
+    tagging = session.client("resourcegroupstaggingapi", config=cfg)
+    # sample the first page of tagged resources in the region
+    page = tagging.get_resources(ResourcesPerPage=100)
+    sample = len(page.get("ResourceTagMappingList", []))
+    return {"account_id": ident["Account"], "arn": ident.get("Arn", ""),
+            "region": region, "sample_resource_count": sample}
+
+
+@router.post("/test-connection")
+async def test_connection(current=Depends(require_admin)):
+    """Verify saved AWS credentials actually work and report account + a sample count."""
+    s = await _get_settings()
+    if not (s.get("access_key_id") and s.get("secret_access_key")):
+        return {"ok": False, "error": "No AWS credentials saved. Enter an access key and secret, then Save first."}
+    region = s.get("region", "us-east-1")
+    import asyncio
+    try:
+        info = await asyncio.to_thread(
+            _test_connection_sync, s["access_key_id"], s["secret_access_key"], region)
+        return {"ok": True, "use_live": bool(s.get("use_live")), **info}
+    except Exception as e:
+        detail = ""
+        try:
+            if getattr(e, "response", None):
+                detail = e.response["Error"].get("Message", "")
+        except Exception:
+            detail = ""
+        return {"ok": False, "region": region,
+                "error": f"{type(e).__name__}: {detail or str(e)[:300]}"}
+
+
 @router.get("/tag-options")
 async def tag_options():
     s = await _get_settings()

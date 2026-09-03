@@ -83,8 +83,16 @@ export const previewCluster = (data) => client.post("/k8s/preview", data).then((
 // aws discovery
 export const getAwsSettings = () => client.get("/aws/settings").then((r) => r.data);
 export const saveAwsSettings = (data) => client.put("/aws/settings", data).then((r) => r.data);
+export const testAwsConnection = () => client.post("/aws/test-connection").then((r) => r.data);
 export const getTagOptions = () => client.get("/aws/tag-options").then((r) => r.data);
 export const discoverAws = (data) => client.post("/aws/discover", data).then((r) => r.data);
+
+// non-k8s workloads
+export const listWorkloads = () => client.get("/workloads").then((r) => r.data);
+export const createWorkload = (data) => client.post("/workloads", data).then((r) => r.data);
+export const updateWorkload = (id, data) => client.put(`/workloads/${id}`, data).then((r) => r.data);
+export const deleteWorkload = (id) => client.delete(`/workloads/${id}`).then((r) => r.data);
+export const previewWorkload = (data) => client.post("/workloads/preview", data).then((r) => r.data);
 
 // db config
 export const listDbServices = () => client.get("/db/services").then((r) => r.data);

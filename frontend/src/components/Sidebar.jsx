@@ -1,11 +1,12 @@
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Boxes, Users, LogOut, Ship, Database } from "lucide-react";
+import { LayoutDashboard, Boxes, Users, LogOut, Ship, Database, Server } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 
 const nav = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true, id: "nav-dashboard" },
   { to: "/db-config", label: "DB Config", icon: Database, id: "nav-db-config" },
   { to: "/kubernetes", label: "Kubernetes", icon: Ship, id: "nav-kubernetes" },
+  { to: "/workloads", label: "Workloads", icon: Server, id: "nav-workloads" },
   { to: "/team", label: "Team", icon: Users, id: "nav-team" },
 ];
 

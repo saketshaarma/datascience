@@ -21,6 +21,7 @@ import auth
 from auth import auth_router, get_current_user, require_admin
 from terraform_generator import generate_terraform
 from k8s_generator import generate_k8s, build_config_json
+from workloads_generator import generate_workload
 import db_config
 import aws_discovery
 
@@ -443,6 +444,105 @@ async def generate_cluster(cluster_id: str):
 async def preview_cluster(payload: K8sClusterCreate):
     """Generate config JSON + Terraform from an unsaved cluster spec."""
     return generate_k8s(payload.model_dump())
+
+
+# ----------------------------- Non-K8s Workloads -----------------------------
+class WorkloadVolume(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    device_name: str = "/dev/sdf"
+    size_gb: Optional[int] = None
+    volume_type: str = "gp3"
+
+
+class WorkloadNode(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    hostname: str = ""
+    role: str = ""
+    instance_type: str = "t3.medium"
+    root_volume_size: int = 30
+    data_volumes: List[WorkloadVolume] = Field(default_factory=list)
+
+
+class WorkloadBase(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    name: str = "workload"
+    aws_region: str = "ap-south-1"
+    vpc_tag: str = ""
+    subnet_tag: str = ""
+    key_name: str = ""
+    enable_dns: bool = False
+    private_zone_name: str = ""
+    ami_id: str = ""
+    ingress_ports: List[int] = Field(default_factory=list)
+    security_group_tags: dict = Field(default_factory=dict)
+    instance_tags: dict = Field(default_factory=dict)
+    volume_tags: dict = Field(default_factory=dict)
+    nodes: List[WorkloadNode] = Field(default_factory=list)
+    extra: dict = Field(default_factory=dict)
+
+
+class WorkloadCreate(WorkloadBase):
+    pass
+
+
+class Workload(WorkloadBase):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: str = Field(default_factory=now_iso)
+    updated_at: str = Field(default_factory=now_iso)
+
+
+@api_router.get("/workloads", response_model=List[Workload])
+async def list_workloads():
+    docs = await db.workloads.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return docs
+
+
+@api_router.post("/workloads", response_model=Workload)
+async def create_workload(payload: WorkloadCreate):
+    obj = Workload(**payload.model_dump())
+    await db.workloads.insert_one(obj.model_dump())
+    return obj
+
+
+@api_router.get("/workloads/{workload_id}", response_model=Workload)
+async def get_workload(workload_id: str):
+    doc = await db.workloads.find_one({"id": workload_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Workload not found")
+    return doc
+
+
+@api_router.put("/workloads/{workload_id}", response_model=Workload)
+async def update_workload(workload_id: str, payload: WorkloadCreate):
+    existing = await db.workloads.find_one({"id": workload_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Workload not found")
+    data = payload.model_dump()
+    data["updated_at"] = now_iso()
+    await db.workloads.update_one({"id": workload_id}, {"$set": data})
+    return await db.workloads.find_one({"id": workload_id}, {"_id": 0})
+
+
+@api_router.delete("/workloads/{workload_id}")
+async def delete_workload(workload_id: str, current=Depends(require_admin)):
+    res = await db.workloads.delete_one({"id": workload_id})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Workload not found")
+    return {"deleted": True}
+
+
+@api_router.post("/workloads/{workload_id}/generate")
+async def generate_workload_saved(workload_id: str):
+    doc = await db.workloads.find_one({"id": workload_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Workload not found")
+    return generate_workload(doc)
+
+
+@api_router.post("/workloads/preview")
+async def preview_workload(payload: WorkloadCreate):
+    """Generate config JSON + Terraform from an unsaved workload spec."""
+    return generate_workload(payload.model_dump())
 
 
 

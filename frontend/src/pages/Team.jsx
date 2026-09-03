@@ -15,7 +15,7 @@ import { Switch } from "@/components/ui/switch";
 import { PageHeader } from "@/components/PageHeader";
 import {
   listUsers, createUser, deleteUser, formatApiErrorDetail,
-  getAwsSettings, saveAwsSettings,
+  getAwsSettings, saveAwsSettings, testAwsConnection,
 } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -166,6 +166,8 @@ const AwsSettingsCard = () => {
   const [form, setForm] = useState({ access_key_id: "", secret_access_key: "", region: "us-east-1", use_live: false });
   const [info, setInfo] = useState({ configured: false, access_key_id_masked: "" });
   const [busy, setBusy] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
 
   useEffect(() => {
     getAwsSettings().then((s) => {
@@ -177,7 +179,7 @@ const AwsSettingsCard = () => {
   const save = async () => {
     setBusy(true);
     try {
-      const res = await saveAwsSettings(form);
+      await saveAwsSettings(form);
       toast.success("AWS settings saved");
       setForm((f) => ({ ...f, access_key_id: "", secret_access_key: "" }));
       const s = await getAwsSettings();
@@ -188,6 +190,20 @@ const AwsSettingsCard = () => {
     } finally { setBusy(false); }
   };
 
+  const test = async () => {
+    setTesting(true); setTestResult(null);
+    try {
+      const r = await testAwsConnection();
+      setTestResult(r);
+      if (r.ok) toast.success(`Connected to AWS account ${r.account_id}`);
+      else toast.error(r.error || "Connection failed");
+    } catch (e) {
+      const err = e.response?.data?.detail || "Connection test failed";
+      setTestResult({ ok: false, error: formatApiErrorDetail(err) });
+      toast.error(formatApiErrorDetail(err));
+    } finally { setTesting(false); }
+  };
+
   return (
     <div data-testid="aws-settings-card" className="bg-[#18181B] border border-[#27272A] rounded-sm p-5 max-w-3xl mb-6">
       <div className="flex items-center gap-2 mb-1">
@@ -196,11 +212,19 @@ const AwsSettingsCard = () => {
         <Badge variant="outline" className={`ml-2 rounded-sm font-mono text-[10px] ${info.configured ? "bg-green-500/15 text-green-400 border-green-500/30" : "bg-zinc-500/15 text-zinc-400 border-zinc-500/30"}`}>
           {info.configured ? "configured" : "not set"}
         </Badge>
+        <Badge variant="outline" className={`rounded-sm font-mono text-[10px] ${info.use_live ? "bg-green-500/15 text-green-400 border-green-500/30" : "bg-yellow-500/15 text-yellow-400 border-yellow-500/30"}`}>
+          {info.use_live ? "LIVE" : "DEMO"}
+        </Badge>
       </div>
       <p className="text-xs text-zinc-500 mb-4">
         Used by the Discovery Dashboard. Leave demo mode off to keep using mock discovery.
         {info.configured && <> Current key: <span className="font-mono text-zinc-400">{info.access_key_id_masked}</span></>}
       </p>
+      {info.configured && !info.use_live && (
+        <div data-testid="aws-live-warning" className="mb-4 text-xs text-yellow-400 bg-yellow-500/10 border border-yellow-500/30 rounded-sm px-3 py-2">
+          Keys are saved but <b>Live discovery is OFF</b> — the dashboard shows demo data. Turn on the switch below and Save to query real AWS resources.
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
           <Label className="text-xs text-zinc-400">AWS Access Key ID</Label>
@@ -222,7 +246,18 @@ const AwsSettingsCard = () => {
           </div>
         </div>
       </div>
-      <div className="flex justify-end mt-4">
+      {testResult && (
+        <div data-testid="aws-test-result" className={`mt-4 text-xs rounded-sm px-3 py-2 font-mono ${testResult.ok ? "bg-green-500/10 border border-green-500/30 text-green-300" : "bg-red-500/10 border border-red-500/30 text-red-300"}`}>
+          {testResult.ok
+            ? <>OK · account <b>{testResult.account_id}</b> · region <b>{testResult.region}</b> · {testResult.sample_resource_count} tagged resource(s) sampled{!testResult.use_live && <> · (live mode is OFF)</>}</>
+            : <>Failed: {testResult.error}</>}
+        </div>
+      )}
+      <div className="flex justify-end gap-2 mt-4">
+        <Button data-testid="aws-test-connection" onClick={test} disabled={testing || !info.configured} variant="outline"
+          className="border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm gap-2">
+          <Cloud className="h-4 w-4" /> {testing ? "Testing…" : "Test Connection"}
+        </Button>
         <Button data-testid="aws-save-settings" onClick={save} disabled={busy} className="bg-orange-500 hover:bg-orange-600 text-white rounded-sm gap-2">
           <Save className="h-4 w-4" /> {busy ? "Saving…" : "Save AWS settings"}
         </Button>

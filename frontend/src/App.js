@@ -7,6 +7,7 @@ import Login from "@/pages/Login";
 import Dashboard from "@/pages/Dashboard";
 import DbConfig from "@/pages/DbConfig";
 import Kubernetes from "@/pages/Kubernetes";
+import Workloads from "@/pages/Workloads";
 import Team from "@/pages/Team";
 import { Loader2 } from "lucide-react";
 
@@ -45,6 +46,7 @@ function App() {
             <Route path="/" element={<Protected><Dashboard /></Protected>} />
             <Route path="/db-config" element={<Protected><DbConfig /></Protected>} />
             <Route path="/kubernetes" element={<Protected><Kubernetes /></Protected>} />
+            <Route path="/workloads" element={<Protected><Workloads /></Protected>} />
             <Route path="/team" element={<Protected><Team /></Protected>} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
