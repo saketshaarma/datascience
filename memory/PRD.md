@@ -116,3 +116,9 @@ infrastructure. Acts as the central source of truth for DevOps/Infrastructure te
 - Root cause of user's "still demo mode": credentials were valid (Test Connection returned account + 100 resources) but `use_live` was OFF, so /api/aws/discover served demo data. Backend persistence of use_live verified correct via curl + UI.
 - UX fix (Team.jsx): a successful **Test Connection now auto-enables live discovery** (saves use_live=true, refreshes badge to LIVE) so users don't have to separately toggle+save. Failure path unchanged (shows real AWS ClientError inline + toast). Self-tested via screenshot (invalid-cred path); success/auto-enable path requires valid AWS creds (not available in preview).
 - Immediate workaround for user: flip Live discovery switch ON + Save → badge LIVE → Dashboard Discover shows real resources.
+
+## Fix (2026-06) — Invisible Live-discovery toggle + AWS field autofill
+- BUG: shadcn `Switch` uses `data-[state=unchecked]:bg-input` which on the dark theme is ~invisible, so users couldn't see/find the Live discovery toggle on Team page.
+- FIX (Team.jsx): replaced the Switch with an explicit always-visible pill button (orange=ON / zinc-700=OFF) + ON/OFF badge. data-testid still `aws-use-live` (role=switch, aria-checked). Verified via screenshot desktop+mobile: toggle visible, flips OFF->ON.
+- FIX: browser was autofilling admin@infraforge.io into the AWS Access Key field (and password into Secret) — added autoComplete off / new-password + name attrs on access-key/secret/region inputs to stop autofill (autofilled email could overwrite the saved key on Save -> "invalid token").
+- User must redeploy images to get these on their self-hosted instance, and re-enter real AWS keys.

@@ -241,20 +241,32 @@ const AwsSettingsCard = () => {
       <div className="grid grid-cols-2 gap-4">
         <div className="space-y-1.5">
           <Label className="text-xs text-zinc-400">AWS Access Key ID</Label>
-          <Input data-testid="aws-access-key" className={inputClsAws} value={form.access_key_id} onChange={(e) => setForm({ ...form, access_key_id: e.target.value })} placeholder={info.configured ? "•••• (unchanged)" : "AKIA..."} />
+          <Input data-testid="aws-access-key" name="ff-aws-access-key" autoComplete="off" className={inputClsAws} value={form.access_key_id} onChange={(e) => setForm({ ...form, access_key_id: e.target.value })} placeholder={info.configured ? "•••• (unchanged)" : "AKIA..."} />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs text-zinc-400">AWS Secret Access Key</Label>
-          <Input data-testid="aws-secret-key" type="password" className={inputClsAws} value={form.secret_access_key} onChange={(e) => setForm({ ...form, secret_access_key: e.target.value })} placeholder={info.configured ? "•••• (unchanged)" : "secret"} />
+          <Input data-testid="aws-secret-key" name="ff-aws-secret-key" autoComplete="new-password" type="password" className={inputClsAws} value={form.secret_access_key} onChange={(e) => setForm({ ...form, secret_access_key: e.target.value })} placeholder={info.configured ? "•••• (unchanged)" : "secret"} />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs text-zinc-400">Default Region</Label>
-          <Input data-testid="aws-region" className={inputClsAws} value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} placeholder="ap-south-2" />
+          <Input data-testid="aws-region" name="ff-aws-region" autoComplete="off" className={inputClsAws} value={form.region} onChange={(e) => setForm({ ...form, region: e.target.value })} placeholder="ap-south-2" />
         </div>
         <div className="flex items-center gap-3 pt-6">
-          <Switch data-testid="aws-use-live" checked={form.use_live} onCheckedChange={(v) => setForm({ ...form, use_live: v })} />
+          <button
+            type="button"
+            data-testid="aws-use-live"
+            role="switch"
+            aria-checked={form.use_live}
+            onClick={() => setForm({ ...form, use_live: !form.use_live })}
+            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full border transition-colors duration-150 ${form.use_live ? "bg-orange-500 border-orange-500" : "bg-zinc-700 border-zinc-600"}`}
+          >
+            <span className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform duration-150 ${form.use_live ? "translate-x-6" : "translate-x-1"}`} />
+          </button>
           <div>
-            <div className="text-sm text-white">Live discovery</div>
+            <div className="text-sm text-white flex items-center gap-2">
+              Live discovery
+              <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded-sm ${form.use_live ? "bg-green-500/15 text-green-400" : "bg-zinc-500/15 text-zinc-400"}`}>{form.use_live ? "ON" : "OFF"}</span>
+            </div>
             <div className="text-[11px] text-zinc-500">Off = demo/mock mode</div>
           </div>
         </div>
