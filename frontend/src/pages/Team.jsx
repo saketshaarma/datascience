@@ -194,9 +194,22 @@ const AwsSettingsCard = () => {
     setTesting(true); setTestResult(null);
     try {
       const r = await testAwsConnection();
-      setTestResult(r);
-      if (r.ok) toast.success(`Connected to AWS account ${r.account_id}`);
-      else toast.error(r.error || "Connection failed");
+      if (r.ok && !r.use_live) {
+        // Credentials work but live mode is off — enable it automatically so the
+        // dashboard immediately queries real AWS instead of demo data.
+        await saveAwsSettings({ access_key_id: "", secret_access_key: "", region: r.region, use_live: true });
+        const s = await getAwsSettings();
+        setInfo(s);
+        setForm((f) => ({ ...f, use_live: s.use_live, region: s.region }));
+        setTestResult({ ...r, use_live: true });
+        toast.success(`Connected to ${r.account_id} — live discovery turned ON`);
+      } else if (r.ok) {
+        setTestResult(r);
+        toast.success(`Connected to AWS account ${r.account_id}`);
+      } else {
+        setTestResult(r);
+        toast.error(r.error || "Connection failed");
+      }
     } catch (e) {
       const err = e.response?.data?.detail || "Connection test failed";
       setTestResult({ ok: false, error: formatApiErrorDetail(err) });

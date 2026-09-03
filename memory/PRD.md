@@ -111,3 +111,8 @@ infrastructure. Acts as the central source of truth for DevOps/Infrastructure te
 - **AWS Test Connection**: new `POST /api/aws/test-connection` (admin) does sts:GetCallerIdentity + a sample get_resources and reports account/region/sample-count or the REAL AWS error. Team page shows LIVE/DEMO badge, a "keys saved but live is OFF" warning, and a Test Connection button with a result strip.
 - **Dashboard**: renders every discovered resource kind dynamically (unknown kinds get a generic table), added an "RDS Databases" type card, and surfaces the real 502 error message from failed live discovery.
 - NOTE: The user's "not showing" issue was on their DEPLOYED instance where the badge read DEMO MODE (live toggle off) AND it runs pre-fix code — they must enable Live discovery and redeploy the images to pick up the resource-type fix.
+
+## Update (2026-06) — Live discovery UX
+- Root cause of user's "still demo mode": credentials were valid (Test Connection returned account + 100 resources) but `use_live` was OFF, so /api/aws/discover served demo data. Backend persistence of use_live verified correct via curl + UI.
+- UX fix (Team.jsx): a successful **Test Connection now auto-enables live discovery** (saves use_live=true, refreshes badge to LIVE) so users don't have to separately toggle+save. Failure path unchanged (shows real AWS ClientError inline + toast). Self-tested via screenshot (invalid-cred path); success/auto-enable path requires valid AWS creds (not available in preview).
+- Immediate workaround for user: flip Live discovery switch ON + Save → badge LIVE → Dashboard Discover shows real resources.
