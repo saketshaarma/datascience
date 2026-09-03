@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import {
-  Server, HardDrive, ShieldCheck, Globe, FileText, Search, RefreshCw, Radar, Cloud, Network, Tag as TagIcon,
+  Server, HardDrive, ShieldCheck, Globe, FileText, Search, RefreshCw, Radar, Cloud, Network, Tag as TagIcon, Database,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -18,6 +18,7 @@ const TYPES = [
   { kind: "ec2_instance", label: "EC2 Instances", icon: Server },
   { kind: "security_group", label: "Security Groups", icon: ShieldCheck },
   { kind: "ebs_volume", label: "Volumes", icon: HardDrive },
+  { kind: "rds_db", label: "RDS Databases", icon: Database },
   { kind: "route53_zone", label: "Route53 Zones", icon: Globe },
   { kind: "a_record", label: "A Records", icon: FileText },
 ];
@@ -56,6 +57,11 @@ const COLUMNS = {
     { label: "Size (GB)", render: (r) => D(r, "size_gb") },
     { label: "Type", render: (r) => D(r, "volume_type") },
     { label: "Attached To", render: (r) => D(r, "attached_to") },
+  ],
+  rds_db: [
+    { label: "Name", render: (r) => r.name },
+    { label: "Status", render: (r) => r.status || "—" },
+    { label: "Region", render: (r) => r.region || "—" },
   ],
   route53_zone: [
     { label: "Zone", render: (r) => r.name },
@@ -125,7 +131,7 @@ export default function Dashboard() {
 
       <div className="p-8 space-y-6">
         {/* type selector */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
           {TYPES.map((t) => {
             const Icon = t.icon;
             const active = activeKind === t.kind;

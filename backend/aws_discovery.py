@@ -179,30 +179,149 @@ def _summarize(resources, mode, region, account_id, tag_key, tag_value):
     }
 
 
-def _discover_live_sync(access_key, secret, region, tag_key, tag_value):
+def _parse_arn(arn):
+    """Return (service, resource_type, resource_id) from an ARN."""
+    parts = arn.split(":", 5)
+    service = parts[2] if len(parts) > 2 else ""
+    resource = parts[5] if len(parts) > 5 else ""
+    if "/" in resource:
+        rtype, rid = resource.split("/", 1)
+    elif ":" in resource:
+        rtype, rid = resource.split(":", 1)
+    else:
+        rtype, rid = resource, resource
+    return service, rtype, rid
+
+
+def _kind_from_arn(service, rtype):
+    m = {
+        ("ec2", "instance"): "ec2_instance",
+        ("ec2", "volume"): "ebs_volume",
+        ("ec2", "security-group"): "security_group",
+        ("route53", "hostedzone"): "route53_zone",
+        ("rds", "db"): "rds_db",
+    }
+    return m.get((service, rtype)) or (f"{service}:{rtype}" if rtype else (service or "unknown"))
+
+
+def _new_session(access_key, secret, region):
     import boto3
+    return boto3.Session(aws_access_key_id=access_key, aws_secret_access_key=secret,
+                         region_name=region)
+
+
+def _boto_cfg():
     from botocore.config import Config
-    session = boto3.Session(aws_access_key_id=access_key, aws_secret_access_key=secret,
-                            region_name=region)
-    cfg = Config(read_timeout=15, connect_timeout=5, retries={"mode": "standard", "max_attempts": 3})
+    return Config(read_timeout=25, connect_timeout=6, retries={"mode": "standard", "max_attempts": 3})
+
+
+def _discover_live_sync(access_key, secret, region, tag_key, tag_value):
+    session = _new_session(access_key, secret, region)
+    cfg = _boto_cfg()
     account_id = session.client("sts", config=cfg).get_caller_identity()["Account"]
     tagging = session.client("resourcegroupstaggingapi", config=cfg)
-    tag_filters = [{"Key": tag_key, "Values": [tag_value] if tag_value else []}] if tag_key else []
-    out = []
-    kind_map = {"instance": "ec2_instance", "volume": "ebs_volume",
-                "security-group": "security_group"}
+
+    tag_filters = []
+    if tag_key:
+        tf = {"Key": tag_key}
+        if tag_value:
+            tf["Values"] = [tag_value]
+        tag_filters.append(tf)
+
+    # Discover EVERY tagged resource in the region (no resource-type restriction).
+    raw = []
     for page in tagging.get_paginator("get_resources").paginate(
-            TagFilters=tag_filters,
-            ResourceTypeFilters=["ec2:instance", "ec2:volume", "ec2:security-group", "rds:db"],
-            ResourcesPerPage=100):
-        for item in page.get("ResourceTagMappingList", []):
-            arn = item["ResourceARN"]
-            rtype = arn.split(":")[5].split("/")[0].split(":")[0]
-            out.append({"id": arn.rsplit("/", 1)[-1].rsplit(":", 1)[-1], "arn": arn,
-                        "kind": kind_map.get(rtype, rtype), "name": arn.rsplit("/", 1)[-1],
-                        "region": region, "status": "-", "source": "aws",
-                        "tags": {t["Key"]: t.get("Value", "") for t in item.get("Tags", [])}})
-    return account_id, out
+            TagFilters=tag_filters, ResourcesPerPage=100):
+        raw.extend(page.get("ResourceTagMappingList", []))
+
+    resources, instance_ids, volume_ids = [], [], []
+    for item in raw:
+        arn = item["ResourceARN"]
+        tags = {t["Key"]: t.get("Value", "") for t in item.get("Tags", [])}
+        service, rtype, rid = _parse_arn(arn)
+        kind = _kind_from_arn(service, rtype)
+        r = {
+            "id": rid, "arn": arn, "kind": kind,
+            "name": tags.get("Name") or rid,
+            "region": "global" if service in ("route53", "iam", "cloudfront") else region,
+            "status": "-", "source": "aws", "tags": tags,
+            "details": {"arn": arn, "service": service, "resource_type": rtype},
+        }
+        resources.append(r)
+        if kind == "ec2_instance" and rid.startswith("i-"):
+            instance_ids.append(rid)
+        elif kind == "ebs_volume" and rid.startswith("vol-"):
+            volume_ids.append(rid)
+
+    # Enrich EC2 instances with useful details for the dashboard table/popup.
+    if instance_ids:
+        try:
+            ec2 = session.client("ec2", config=cfg)
+            info = {}
+            for i in range(0, len(instance_ids), 100):
+                for res in ec2.describe_instances(InstanceIds=instance_ids[i:i + 100]).get("Reservations", []):
+                    for inst in res.get("Instances", []):
+                        info[inst["InstanceId"]] = inst
+            for r in resources:
+                inst = info.get(r["id"]) if r["kind"] == "ec2_instance" else None
+                if inst:
+                    r["status"] = inst.get("State", {}).get("Name", "-")
+                    r["details"].update({
+                        "instance_id": inst["InstanceId"],
+                        "instance_type": inst.get("InstanceType", ""),
+                        "private_ip": inst.get("PrivateIpAddress", ""),
+                        "public_ip": inst.get("PublicIpAddress", ""),
+                        "availability_zone": inst.get("Placement", {}).get("AvailabilityZone", ""),
+                        "vpc": inst.get("VpcId", ""),
+                        "subnet": inst.get("SubnetId", ""),
+                        "ami": inst.get("ImageId", ""),
+                    })
+        except Exception:
+            pass
+
+    # Enrich EBS volumes.
+    if volume_ids:
+        try:
+            ec2 = session.client("ec2", config=cfg)
+            vinfo = {}
+            for i in range(0, len(volume_ids), 200):
+                for v in ec2.describe_volumes(VolumeIds=volume_ids[i:i + 200]).get("Volumes", []):
+                    vinfo[v["VolumeId"]] = v
+            for r in resources:
+                v = vinfo.get(r["id"]) if r["kind"] == "ebs_volume" else None
+                if v:
+                    att = v.get("Attachments", [])
+                    r["status"] = v.get("State", "-")
+                    r["details"].update({
+                        "size_gb": v.get("Size"),
+                        "volume_type": v.get("VolumeType", ""),
+                        "device_name": att[0].get("Device", "") if att else "",
+                        "attached_to": att[0].get("InstanceId", "") if att else "",
+                        "availability_zone": v.get("AvailabilityZone", ""),
+                    })
+        except Exception:
+            pass
+
+    return account_id, resources
+
+
+def _live_tag_options_sync(access_key, secret, region):
+    session = _new_session(access_key, secret, region)
+    cfg = _boto_cfg()
+    tagging = session.client("resourcegroupstaggingapi", config=cfg)
+    keys = []
+    for page in tagging.get_paginator("get_tag_keys").paginate():
+        keys.extend(page.get("TagKeys", []))
+    values = {}
+    for k in keys:
+        vals = []
+        try:
+            for page in tagging.get_paginator("get_tag_values").paginate(Key=k):
+                vals.extend(page.get("TagValues", []))
+        except Exception:
+            pass
+        values[k] = sorted({v for v in vals if v})
+    return sorted(set(keys)), values
 
 
 # ----------------------------- router -----------------------------
@@ -234,12 +353,22 @@ async def save_aws_settings(payload: AwsSettings, current=Depends(require_admin)
 
 @router.get("/tag-options")
 async def tag_options():
+    s = await _get_settings()
+    if s.get("use_live") and s.get("access_key_id") and s.get("secret_access_key"):
+        import asyncio
+        try:
+            keys, values = await asyncio.to_thread(
+                _live_tag_options_sync, s["access_key_id"], s["secret_access_key"],
+                s.get("region", "us-east-1"))
+            return {"keys": keys, "values": values, "mode": "live"}
+        except Exception:
+            pass  # fall back to portal-derived tags if live lookup fails
     resources = await _collect_resources()
     keys = {}
     for r in resources:
         for k, v in (r.get("tags") or {}).items():
             keys.setdefault(k, set()).add(str(v))
-    return {"keys": sorted(keys.keys()), "values": {k: sorted(v) for k, v in keys.items()}}
+    return {"keys": sorted(keys.keys()), "values": {k: sorted(v) for k, v in keys.items()}, "mode": "demo"}
 
 
 class DiscoverBody(BaseModel):
@@ -262,7 +391,15 @@ async def discover(body: DiscoverBody):
                 region, tag_key, tag_value)
             return _summarize(resources, "live", region, account_id, tag_key, tag_value)
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"AWS live discovery failed: {type(e).__name__}")
+            detail = ""
+            try:
+                if getattr(e, "response", None):
+                    detail = e.response["Error"].get("Message", "")
+            except Exception:
+                detail = ""
+            raise HTTPException(
+                status_code=502,
+                detail=f"AWS live discovery failed: {type(e).__name__}: {detail or str(e)[:300]}")
 
     # demo/mock
     resources = await _collect_resources()
