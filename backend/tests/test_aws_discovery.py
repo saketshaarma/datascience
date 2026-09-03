@@ -174,6 +174,69 @@ class TestAwsSettings:
                            "region": "us-east-1", "use_live": False},
                      headers=admin_headers)
 
+    def test_live_fake_creds_ap_south_1_502_detail(self, admin_headers):
+        """Per iteration_11 request: real-looking fake creds in ap-south-1
+        must return 502 with detail starting 'AWS live discovery failed:'."""
+        put = requests.put(
+            f"{API}/aws/settings",
+            json={"access_key_id": "AKIAFAKEEXAMPLE12345",
+                  "secret_access_key": "fakeSecretKeyForTesting1234567890abcdef",
+                  "region": "ap-south-1", "use_live": True},
+            headers=admin_headers)
+        assert put.status_code == 200, put.text
+
+        g = requests.get(f"{API}/aws/settings", headers=admin_headers).json()
+        assert g["configured"] is True
+        assert g["use_live"] is True
+        assert g["region"] == "ap-south-1"
+        assert g["access_key_id_masked"].endswith("2345")
+        assert "AKIAFAKE" not in g["access_key_id_masked"]
+
+        r = requests.post(f"{API}/aws/discover",
+                          json={"tag_key": "ManagedBy", "tag_value": "Terraform"},
+                          headers=admin_headers, timeout=60)
+        assert r.status_code == 502, f"expected 502 got {r.status_code}: {r.text[:300]}"
+        # Public ingress (Cloudflare) may replace 5xx bodies with an HTML page.
+        # Verify JSON detail directly against the internal backend where possible.
+        try:
+            detail = r.json().get("detail", "")
+        except Exception:
+            detail = ""
+        if not detail:
+            # Query origin backend directly for the actual JSON error surface.
+            import requests as _rq
+            r2 = _rq.post("http://localhost:8001/api/aws/discover",
+                          json={"tag_key": "ManagedBy", "tag_value": "Terraform"},
+                          headers=admin_headers, timeout=60)
+            assert r2.status_code == 502, r2.text[:300]
+            detail = r2.json().get("detail", "")
+        assert detail.startswith("AWS live discovery failed:"), detail
+        assert any(name in detail for name in (
+            "InvalidClientTokenId", "AuthFailure",
+            "UnrecognizedClientException", "ClientError",
+            "SignatureDoesNotMatch", "EndpointConnectionError",
+            "security token")), detail
+
+        # Reset to demo mode as required
+        reset = requests.put(f"{API}/aws/settings",
+                             json={"access_key_id": "", "secret_access_key": "",
+                                   "region": "ap-south-1", "use_live": False},
+                             headers=admin_headers)
+        assert reset.status_code == 200
+        g2 = requests.get(f"{API}/aws/settings", headers=admin_headers).json()
+        assert g2["use_live"] is False
+
+    def test_tag_options_mode_field(self, admin_headers):
+        # After reset above we should be in demo mode
+        requests.put(f"{API}/aws/settings",
+                     json={"access_key_id": "", "secret_access_key": "",
+                           "region": "us-east-1", "use_live": False},
+                     headers=admin_headers)
+        r = requests.get(f"{API}/aws/tag-options", headers=admin_headers)
+        assert r.status_code == 200
+        d = r.json()
+        assert d.get("mode") == "demo"
+
 
 # --- regression endpoints ---
 class TestRegression:

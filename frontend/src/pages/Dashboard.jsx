@@ -78,6 +78,18 @@ const COLUMNS = {
   ],
 };
 
+const GENERIC_COLS = [
+  { label: "Name", render: (r) => r.name },
+  { label: "ID", render: (r) => r.id },
+  { label: "Type", render: (r) => r.details?.resource_type || r.kind },
+  { label: "Status", render: (r) => r.status || "—" },
+  { label: "Region", render: (r) => r.region || "—" },
+];
+
+const prettyKind = (k) =>
+  (TYPES.find((t) => t.kind === k)?.label) ||
+  String(k).replace(/[:_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+
 export default function Dashboard() {
   const [tagKeys, setTagKeys] = useState([]);
   const [tagValues, setTagValues] = useState({});
@@ -114,8 +126,16 @@ export default function Dashboard() {
   const onKeyChange = (k) => { setKey(k); setValue("__all__"); };
   const s = data || { total: 0, resources: [], mode: "demo", region: "-", account_id: "-" };
   const countOf = (kind) => s.resources.filter((r) => r.kind === kind).length;
+  // Known type cards + any additional resource kinds returned by live discovery.
+  const extraKinds = Array.from(new Set(s.resources.map((r) => r.kind))).filter(
+    (k) => !TYPES.some((t) => t.kind === k)
+  );
+  const typeCards = [
+    ...TYPES,
+    ...extraKinds.map((k) => ({ kind: k, label: prettyKind(k), icon: Network })),
+  ];
   const rows = s.resources.filter((r) => r.kind === activeKind);
-  const cols = COLUMNS[activeKind];
+  const cols = COLUMNS[activeKind] || GENERIC_COLS;
 
   return (
     <div>
@@ -132,7 +152,7 @@ export default function Dashboard() {
       <div className="p-8 space-y-6">
         {/* type selector */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {TYPES.map((t) => {
+          {typeCards.map((t) => {
             const Icon = t.icon;
             const active = activeKind === t.kind;
             return (
@@ -205,7 +225,7 @@ export default function Dashboard() {
               </thead>
               <tbody>
                 {rows.length === 0 ? (
-                  <tr><td colSpan={cols.length + 2} className="px-4 py-16 text-center text-zinc-600">No {TYPES.find((t) => t.kind === activeKind)?.label} for this filter.</td></tr>
+                  <tr><td colSpan={cols.length + 2} className="px-4 py-16 text-center text-zinc-600">No {typeCards.find((t) => t.kind === activeKind)?.label || activeKind} for this filter.</td></tr>
                 ) : rows.map((r, i) => (
                   <tr key={i} data-testid={`res-row-${i}`} className="border-b border-[#27272A]/60 hover:bg-white/5 transition-colors duration-150">
                     {cols.map((c, ci) => (
