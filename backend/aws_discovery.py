@@ -7,7 +7,7 @@ boto3 + the Resource Groups Tagging API instead.
 """
 import os
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Optional, Literal
 
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -384,6 +384,49 @@ async def test_connection(current=Depends(require_admin)):
             detail = ""
         return {"ok": False, "region": region,
                 "error": f"{type(e).__name__}: {detail or str(e)[:300]}"}
+
+
+def _instance_action_sync(access_key, secret, region, instance_id, action):
+    session = _new_session(access_key, secret, region)
+    cfg = _boto_cfg()
+    ec2 = session.client("ec2", config=cfg)
+    if action == "start":
+        ec2.start_instances(InstanceIds=[instance_id])
+    elif action == "stop":
+        ec2.stop_instances(InstanceIds=[instance_id])
+    else:
+        raise ValueError("Invalid action")
+    desc = ec2.describe_instances(InstanceIds=[instance_id])
+    state = desc["Reservations"][0]["Instances"][0]["State"]["Name"]
+    return state
+
+
+class InstanceActionBody(BaseModel):
+    instance_id: str
+    action: Literal["start", "stop"]
+
+
+@router.post("/instance-action")
+async def instance_action(body: InstanceActionBody, current=Depends(require_admin)):
+    s = await _get_settings()
+    if not (s.get("use_live") and s.get("access_key_id") and s.get("secret_access_key")):
+        raise HTTPException(status_code=400,
+                            detail="Live AWS mode with valid credentials is required to control instances")
+    import asyncio
+    try:
+        state = await asyncio.to_thread(
+            _instance_action_sync, s["access_key_id"], s["secret_access_key"],
+            s.get("region", "us-east-1"), body.instance_id, body.action)
+        return {"ok": True, "instance_id": body.instance_id, "state": state}
+    except Exception as e:
+        detail = ""
+        try:
+            if getattr(e, "response", None):
+                detail = e.response["Error"].get("Message", "")
+        except Exception:
+            detail = ""
+        raise HTTPException(status_code=502,
+                            detail=f"EC2 {body.action} failed: {type(e).__name__}: {detail or str(e)[:300]}")
 
 
 @router.get("/tag-options")

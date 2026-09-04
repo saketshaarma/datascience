@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import {
-  Server, HardDrive, ShieldCheck, Globe, FileText, Search, RefreshCw, Radar, Cloud, Network, Tag as TagIcon, Database,
+  Server, HardDrive, ShieldCheck, Globe, FileText, Search, RefreshCw, Radar, Cloud, Network, Tag as TagIcon, Database, Play, Square,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -11,7 +11,8 @@ import {
   HoverCard, HoverCardContent, HoverCardTrigger,
 } from "@/components/ui/hover-card";
 import { PageHeader } from "@/components/PageHeader";
-import { getTagOptions, discoverAws } from "@/lib/api";
+import { getTagOptions, discoverAws, instanceAction } from "@/lib/api";
+import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 
 const TYPES = [
@@ -91,6 +92,8 @@ const prettyKind = (k) =>
   String(k).replace(/[:_-]/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 
 export default function Dashboard() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [tagKeys, setTagKeys] = useState([]);
   const [tagValues, setTagValues] = useState({});
   const [key, setKey] = useState("__all__");
@@ -98,6 +101,7 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(false);
   const [activeKind, setActiveKind] = useState("ec2_instance");
+  const [actioning, setActioning] = useState(null);
 
   const loadTags = useCallback(async () => {
     try {
@@ -124,6 +128,18 @@ export default function Dashboard() {
   useEffect(() => { loadTags(); run("__all__", "__all__"); }, [loadTags, run]);
 
   const onKeyChange = (k) => { setKey(k); setValue("__all__"); };
+
+  const doAction = async (r, action) => {
+    setActioning(r.id);
+    try {
+      const res = await instanceAction(r.id, action);
+      toast.success(`${r.name}: ${action} → ${res.state}`);
+      setTimeout(() => run(key, value), 1200);
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || `Failed to ${action} instance`);
+    } finally { setActioning(null); }
+  };
+
   const s = data || { total: 0, resources: [], mode: "demo", region: "-", account_id: "-" };
   const countOf = (kind) => s.resources.filter((r) => r.kind === kind).length;
   // Known type cards + any additional resource kinds returned by live discovery.
@@ -136,6 +152,7 @@ export default function Dashboard() {
   ];
   const rows = s.resources.filter((r) => r.kind === activeKind);
   const cols = COLUMNS[activeKind] || GENERIC_COLS;
+  const showActions = activeKind === "ec2_instance" && s.mode === "live" && isAdmin;
 
   return (
     <div>
@@ -221,11 +238,12 @@ export default function Dashboard() {
                   {cols.map((c) => <th key={c.label} className="px-4 py-3 font-medium">{c.label}</th>)}
                   <th className="px-4 py-3 font-medium">Source</th>
                   <th className="px-4 py-3 font-medium text-right">Tags</th>
+                  {showActions && <th className="px-4 py-3 font-medium text-right">Actions</th>}
                 </tr>
               </thead>
               <tbody>
                 {rows.length === 0 ? (
-                  <tr><td colSpan={cols.length + 2} className="px-4 py-16 text-center text-zinc-600">No {typeCards.find((t) => t.kind === activeKind)?.label || activeKind} for this filter.</td></tr>
+                  <tr><td colSpan={cols.length + 2 + (showActions ? 1 : 0)} className="px-4 py-16 text-center text-zinc-600">No {typeCards.find((t) => t.kind === activeKind)?.label || activeKind} for this filter.</td></tr>
                 ) : rows.map((r, i) => (
                   <tr key={i} data-testid={`res-row-${i}`} className="border-b border-[#27272A]/60 hover:bg-white/5 transition-colors duration-150">
                     {cols.map((c, ci) => (
@@ -253,6 +271,25 @@ export default function Dashboard() {
                         {Object.keys(r.tags || {}).length > 3 && <span className="text-[10px] text-zinc-600">+{Object.keys(r.tags).length - 3}</span>}
                       </div>
                     </td>
+                    {showActions && (
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {String(r.status).toLowerCase() === "running" ? (
+                            <Button data-testid={`ec2-stop-${r.id}`} size="sm" disabled={actioning === r.id}
+                              onClick={() => doAction(r, "stop")}
+                              className="h-7 gap-1 bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 hover:bg-yellow-500/25 rounded-sm text-xs">
+                              <Square className="h-3 w-3" /> Stop
+                            </Button>
+                          ) : (
+                            <Button data-testid={`ec2-start-${r.id}`} size="sm" disabled={actioning === r.id}
+                              onClick={() => doAction(r, "start")}
+                              className="h-7 gap-1 bg-green-500/15 text-green-400 border border-green-500/30 hover:bg-green-500/25 rounded-sm text-xs">
+                              <Play className="h-3 w-3" /> Start
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

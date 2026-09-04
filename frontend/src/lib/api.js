@@ -86,6 +86,20 @@ export const saveAwsSettings = (data) => client.put("/aws/settings", data).then(
 export const testAwsConnection = () => client.post("/aws/test-connection").then((r) => r.data);
 export const getTagOptions = () => client.get("/aws/tag-options").then((r) => r.data);
 export const discoverAws = (data) => client.post("/aws/discover", data).then((r) => r.data);
+export const instanceAction = (instance_id, action) =>
+  client.post("/aws/instance-action", { instance_id, action }).then((r) => r.data);
+
+export const exportCombinedJson = async () => {
+  const res = await client.get("/export/combined");
+  const blob = new Blob([JSON.stringify(res.data, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "infraforge_combined.json";
+  a.click();
+  URL.revokeObjectURL(url);
+  return res.data;
+};
 
 // non-k8s workloads
 export const listWorkloads = () => client.get("/workloads").then((r) => r.data);

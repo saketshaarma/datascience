@@ -13,8 +13,8 @@ export const ExcelUpload = ({ open, onOpenChange, onImported }) => {
   const [busy, setBusy] = useState(false);
 
   const pick = (f) => {
-    if (f && f.name.toLowerCase().endsWith(".xlsx")) setFile(f);
-    else toast.error("Please select a .xlsx file");
+    if (f && /\.(xlsx|xlsm|csv)$/i.test(f.name)) setFile(f);
+    else toast.error("Please select a .xlsx or .csv file");
   };
 
   const doImport = async () => {
@@ -40,7 +40,7 @@ export const ExcelUpload = ({ open, onOpenChange, onImported }) => {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="bg-[#18181B] border-[#27272A] text-white">
         <DialogHeader>
-          <DialogTitle className="font-head">Upload Excel</DialogTitle>
+          <DialogTitle className="font-head">Upload Excel / CSV</DialogTitle>
         </DialogHeader>
         <div
           data-testid="excel-dropzone"
@@ -58,16 +58,16 @@ export const ExcelUpload = ({ open, onOpenChange, onImported }) => {
           ) : (
             <>
               <UploadCloud className="h-8 w-8 text-zinc-500 mx-auto mb-3" strokeWidth={1.5} />
-              <p className="text-sm text-zinc-400">Drag & drop your .xlsx here, or</p>
+              <p className="text-sm text-zinc-400">Drag & drop your .xlsx / .csv here, or</p>
               <label className="inline-block mt-2 cursor-pointer text-orange-500 text-sm font-medium hover:underline">
                 browse files
-                <input data-testid="excel-file-input" type="file" accept=".xlsx" className="hidden" onChange={(e) => pick(e.target.files?.[0])} />
+                <input data-testid="excel-file-input" type="file" accept=".xlsx,.xlsm,.csv" className="hidden" onChange={(e) => pick(e.target.files?.[0])} />
               </label>
               <p className="text-[11px] text-zinc-600 mt-3 font-mono">
-                Columns: service_name, instance_name, host, port, instance_type,<br />
-                aws_instance_id, all_dns, srv_record, aws_region, environment, status
+                Flexible columns — recognises InstanceName, Host_Port (or host + port),<br />
+                Instance Type, ALL_DNS, SRV, service_name, aws_instance_id, region, environment, status.
               </p>
-              <p className="text-[11px] text-zinc-600 mt-1 font-mono">Any extra columns become metadata attributes.</p>
+              <p className="text-[11px] text-zinc-600 mt-1 font-mono">Blank-name rows append DNS/SRV to the row above · extra columns become metadata · missing service_name groups under the file name.</p>
             </>
           )}
         </div>

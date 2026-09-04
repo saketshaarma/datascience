@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Plus, X } from "lucide-react";
-import { createDbInstance, updateDbInstance } from "@/lib/api";
+import { createDbInstance, updateDbInstance, createDbService } from "@/lib/api";
 import { toast } from "sonner";
 
 const ENVS = ["DEV", "QA", "UAT", "DR", "PROD"];
@@ -31,9 +31,11 @@ const Field = ({ label, children }) => (
   </div>
 );
 
-export const DbInstanceForm = ({ open, onOpenChange, instance, services, defaultServiceId, onSaved }) => {
+export const DbInstanceForm = ({ open, onOpenChange, instance, services, defaultServiceId, onSaved, onServicesChanged }) => {
   const [form, setForm] = useState(empty(defaultServiceId));
   const [saving, setSaving] = useState(false);
+  const [newSvcName, setNewSvcName] = useState("");
+  const [addingSvc, setAddingSvc] = useState(false);
 
   useEffect(() => {
     if (instance) {
@@ -41,7 +43,25 @@ export const DbInstanceForm = ({ open, onOpenChange, instance, services, default
     } else {
       setForm(empty(defaultServiceId));
     }
+    setNewSvcName("");
   }, [instance, open, defaultServiceId]);
+
+  const createSvc = async () => {
+    const name = newSvcName.trim();
+    if (!name) return;
+    setAddingSvc(true);
+    try {
+      const svc = await createDbService({ service_name: name });
+      toast.success("Service created");
+      setNewSvcName("");
+      setForm((f) => ({ ...f, service_id: svc.id }));
+      onServicesChanged && onServicesChanged();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Failed to create service");
+    } finally {
+      setAddingSvc(false);
+    }
+  };
 
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   const setMeta = (i, key, val) => setForm((f) => {
@@ -89,9 +109,21 @@ export const DbInstanceForm = ({ open, onOpenChange, instance, services, default
             <Select value={form.service_id} onValueChange={(v) => setForm((f) => ({ ...f, service_id: v }))}>
               <SelectTrigger data-testid="db-form-service" className={inputCls}><SelectValue placeholder="Select service" /></SelectTrigger>
               <SelectContent className="bg-[#18181B] border-[#27272A] text-white">
-                {services.map((s) => <SelectItem key={s.id} value={s.id}>{s.service_name}</SelectItem>)}
+                {services.length === 0 ? (
+                  <div className="px-2 py-3 text-xs text-zinc-500">No services yet — create one below</div>
+                ) : services.map((s) => <SelectItem key={s.id} value={s.id}>{s.service_name}</SelectItem>)}
               </SelectContent>
             </Select>
+            <div className="flex gap-2 mt-1.5">
+              <Input data-testid="db-form-new-service" className={inputCls + " h-8 text-xs"} value={newSvcName}
+                onChange={(e) => setNewSvcName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); createSvc(); } }}
+                placeholder="+ create a new service" />
+              <Button data-testid="db-form-create-service" type="button" onClick={createSvc} disabled={addingSvc || !newSvcName.trim()}
+                className="bg-orange-500 hover:bg-orange-600 text-white rounded-sm h-8 px-3 text-xs shrink-0">
+                Add
+              </Button>
+            </div>
           </Field>
           <Field label="Instance Name">
             <Input data-testid="db-form-name" className={inputCls} value={form.instance_name} onChange={set("instance_name")} placeholder="prod-mysql-1" />

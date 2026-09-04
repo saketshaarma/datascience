@@ -20,8 +20,8 @@ from datetime import datetime, timezone
 import auth
 from auth import auth_router, get_current_user, require_admin
 from terraform_generator import generate_terraform
-from k8s_generator import generate_k8s, build_config_json
-from workloads_generator import generate_workload
+from k8s_generator import generate_k8s, build_config_json as k8s_build_config
+from workloads_generator import generate_workload, build_config_json as wl_build_config
 import db_config
 import aws_discovery
 
@@ -543,6 +543,29 @@ async def generate_workload_saved(workload_id: str):
 async def preview_workload(payload: WorkloadCreate):
     """Generate config JSON + Terraform from an unsaved workload spec."""
     return generate_workload(payload.model_dump())
+
+
+@api_router.get("/export/combined")
+async def export_combined():
+    """Clubbed export of DB config + Kubernetes clusters + non-k8s workloads as one JSON."""
+    db_part = await db_config.build_export()
+    k8s_docs = await db.k8s_clusters.find({}, {"_id": 0}).sort("created_at", 1).to_list(1000)
+    wl_docs = await db.workloads.find({}, {"_id": 0}).sort("created_at", 1).to_list(1000)
+    payload = {
+        "generated_at": now_iso(),
+        "db_config": db_part,
+        "kubernetes_clusters": [
+            {"name": c.get("name", "cluster"), "config": k8s_build_config(c)} for c in k8s_docs
+        ],
+        "workloads": [
+            {"name": w.get("name", "workload"), "config": wl_build_config(w)} for w in wl_docs
+        ],
+    }
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content=payload,
+        headers={"Content-Disposition": "attachment; filename=infraforge_combined.json"},
+    )
 
 
 

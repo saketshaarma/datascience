@@ -9,6 +9,8 @@ Mirrors the SQL schema:
                        UNIQUE(instance_id, attribute_key))  -- embedded here
 """
 import io
+import os
+import csv
 import uuid
 from datetime import datetime, timezone
 from typing import List, Optional, Literal
@@ -203,75 +205,164 @@ async def delete_instance(instance_id: str, current=Depends(require_admin)):
     return {"deleted": True}
 
 
-# --- excel import ---
+# --- excel/csv import ---
+FIELD_ALIASES = {
+    "service_name": ["service_name", "service", "servicename", "group", "groupname", "group_name"],
+    "instance_name": ["instance_name", "instancename", "name"],
+    "host_port": ["host_port", "hostport"],
+    "host": ["host", "private_ip", "ip", "address"],
+    "port": ["port"],
+    "instance_type": ["instance_type", "instance", "type", "role", "instance_role"],
+    "aws_instance_id": ["aws_instance_id", "instance_id", "ec2_instance_id", "ec2_id", "awsid"],
+    "all_dns": ["all_dns", "dns", "dns_record", "alldns"],
+    "srv_record": ["srv_record", "srv", "srv_records"],
+    "aws_region": ["aws_region", "region"],
+    "environment": ["environment", "env"],
+    "status": ["status"],
+}
+
+
+def _norm_header(h):
+    return str(h).strip().lower().replace(" ", "_") if h is not None else ""
+
+
+def _dedup_list(items):
+    seen, out = set(), []
+    for x in items:
+        x = (x or "").strip()
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
 @router.post("/import-excel")
 async def import_excel(file: UploadFile = File(...)):
     fname = (file.filename or "").lower()
-    if not fname.endswith((".xlsx", ".xlsm")):
-        raise HTTPException(status_code=400, detail="Only .xlsx files are supported")
+    if not fname.endswith((".xlsx", ".xlsm", ".csv")):
+        raise HTTPException(status_code=400, detail="Only .xlsx or .csv files are supported")
     raw = await file.read()
     if len(raw) > 10 * 1024 * 1024:
         raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True, read_only=True)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Could not read Excel file")
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
+
+    # Read into a list of rows (tuples of cell values).
+    if fname.endswith(".csv"):
+        text = raw.decode("utf-8-sig", errors="replace")
+        rows = list(csv.reader(io.StringIO(text)))
+    else:
+        try:
+            wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=True, read_only=True)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Could not read Excel file")
+        rows = [tuple(r) for r in wb.active.iter_rows(values_only=True)]
+    rows = [r for r in rows if r is not None and any(c not in (None, "") for c in r)]
     if not rows:
         raise HTTPException(status_code=400, detail="Empty sheet")
-    headers = [str(h).strip().lower().replace(" ", "_") if h is not None else "" for h in rows[0]]
 
-    imported, skipped = 0, 0
+    headers = [_norm_header(h) for h in rows[0]]
+    rev = {}
+    for canon, aliases in FIELD_ALIASES.items():
+        for a in aliases:
+            rev.setdefault(a, canon)
+    # header -> canonical field, and list of metadata headers
+    header_field = {h: rev.get(h) for h in headers if h}
+    meta_headers = [h for h in headers if h and h != "id" and not header_field.get(h)]
+
+    default_service = (os.path.splitext(file.filename or "")[0] or "Imported").strip()[:60] or "Imported"
+
+    def rowdict(r):
+        return {headers[i]: r[i] for i in range(min(len(headers), len(r))) if headers[i]}
+
+    def val(row, canon):
+        for h, c in header_field.items():
+            if c == canon:
+                v = row.get(h)
+                if v not in (None, ""):
+                    return str(v).strip()
+        return ""
+
+    # Host-grouped parse: a row with an instance_name starts a new record; rows
+    # with a blank name append their DNS/SRV to the previous record.
+    collected, current, skipped = [], None, 0
+    for r in rows[1:]:
+        row = rowdict(r)
+        name = val(row, "instance_name")
+        dns = val(row, "all_dns")
+        srv = val(row, "srv_record")
+        if name:
+            host = val(row, "host")
+            port = None
+            hp = val(row, "host_port")
+            if hp and not host:
+                if ":" in hp:
+                    h2, _, p = hp.rpartition(":")
+                    host = h2.strip()
+                    try:
+                        port = int(p.strip())
+                    except ValueError:
+                        host = hp
+                else:
+                    host = hp
+            if port is None and val(row, "port"):
+                try:
+                    port = int(val(row, "port"))
+                except ValueError:
+                    port = None
+            env = val(row, "environment").upper() or "DEV"
+            if env not in ENVIRONMENTS:
+                env = "DEV"
+            status = (val(row, "status") or "Running").capitalize()
+            if status not in STATUSES:
+                status = "Running"
+            meta = {}
+            for h in meta_headers:
+                v = row.get(h)
+                if v not in (None, ""):
+                    meta[h] = str(v).strip()
+            current = {
+                "service_name": val(row, "service_name") or default_service,
+                "instance_name": name, "host": host, "port": port,
+                "instance_type": val(row, "instance_type"),
+                "aws_instance_id": val(row, "aws_instance_id"),
+                "aws_region": val(row, "aws_region"),
+                "environment": env, "status": status,
+                "dns": [dns] if dns else [], "srv": [srv] if srv else [],
+                "meta": meta,
+            }
+            collected.append(current)
+        elif current is not None:
+            if dns:
+                current["dns"].append(dns)
+            if srv:
+                current["srv"].append(srv)
+        else:
+            skipped += 1
+
     svc_cache = {s["service_name"]: s["id"] async for s in _db.db_services.find({}, {"_id": 0})}
     existing_awsids = {i["aws_instance_id"] async for i in _db.db_instances.find({"aws_instance_id": {"$ne": ""}}, {"_id": 0, "aws_instance_id": 1})}
 
-    for r in rows[1:]:
-        row = {headers[i]: r[i] for i in range(len(headers)) if headers[i]}
-        service_name = str(row.get("service_name") or "").strip()
-        instance_name = str(row.get("instance_name") or "").strip()
-        if not service_name or not instance_name:
-            skipped += 1
-            continue
-        aws_id = str(row.get("aws_instance_id") or "").strip()
+    imported = 0
+    for ins in collected:
+        aws_id = ins["aws_instance_id"]
         if aws_id and aws_id in existing_awsids:
             skipped += 1
             continue
-
-        # upsert service
-        sid = svc_cache.get(service_name)
+        sid = svc_cache.get(ins["service_name"])
         if not sid:
             sid = str(uuid.uuid4())
             await _db.db_services.insert_one(
-                {"id": sid, "seq": await _next_seq("services"), "service_name": service_name})
-            svc_cache[service_name] = sid
-
-        env = str(row.get("environment") or "DEV").strip().upper()
-        if env not in ENVIRONMENTS:
-            env = "DEV"
-        status = str(row.get("status") or "Running").strip().capitalize()
-        if status not in STATUSES:
-            status = "Running"
-        port = row.get("port")
-        try:
-            port = int(port) if port not in (None, "") else None
-        except (ValueError, TypeError):
-            port = None
-
-        metadata = []
-        for h in headers:
-            if h and h not in KNOWN_COLS and row.get(h) not in (None, ""):
-                metadata.append({"attribute_key": h, "attribute_value": str(row.get(h))})
-
+                {"id": sid, "seq": await _next_seq("services"), "service_name": ins["service_name"]})
+            svc_cache[ins["service_name"]] = sid
+        metadata = [{"attribute_key": k, "attribute_value": v} for k, v in ins["meta"].items()]
         doc = {
             "id": str(uuid.uuid4()), "seq": await _next_seq("instances"),
-            "service_id": sid, "instance_name": instance_name,
-            "host": str(row.get("host") or ""), "port": port,
-            "instance_type": str(row.get("instance_type") or ""),
-            "aws_instance_id": aws_id, "all_dns": str(row.get("all_dns") or ""),
-            "srv_record": str(row.get("srv_record") or ""),
-            "aws_region": str(row.get("aws_region") or ""),
-            "environment": env, "status": status,
+            "service_id": sid, "instance_name": ins["instance_name"],
+            "host": ins["host"], "port": ins["port"],
+            "instance_type": ins["instance_type"], "aws_instance_id": aws_id,
+            "all_dns": "; ".join(_dedup_list(ins["dns"])),
+            "srv_record": "; ".join(_dedup_list(ins["srv"])),
+            "aws_region": ins["aws_region"],
+            "environment": ins["environment"], "status": ins["status"],
             "metadata": _dedup_meta(metadata),
             "created_at": now_iso(), "updated_at": now_iso(),
         }
@@ -284,8 +375,7 @@ async def import_excel(file: UploadFile = File(...)):
 
 
 # --- json export (relational shape) ---
-@router.get("/export-json")
-async def export_json():
+async def build_export():
     services = await _db.db_services.find({}, {"_id": 0}).sort("seq", 1).to_list(5000)
     instances = await _db.db_instances.find({}, {"_id": 0}).sort("seq", 1).to_list(20000)
 
@@ -319,9 +409,13 @@ async def export_json():
                 "attribute_key": m.get("attribute_key"),
                 "attribute_value": m.get("attribute_value"),
             })
+    return {"db_services": db_services, "db_instances": db_instances,
+            "db_instance_metadata": db_meta}
 
-    payload = {"db_services": db_services, "db_instances": db_instances,
-               "db_instance_metadata": db_meta}
+
+@router.get("/export-json")
+async def export_json():
+    payload = await build_export()
     return JSONResponse(
         content=payload,
         headers={"Content-Disposition": "attachment; filename=db_config.json"},

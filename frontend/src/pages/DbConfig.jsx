@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from "react";
 import {
-  Plus, Upload, Search, Pencil, Trash2, Database, FileJson, Server, Check,
+  Plus, Upload, Search, Pencil, Trash2, Database, FileJson, Server, Check, Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,7 @@ import { DbInstanceForm } from "@/components/DbInstanceForm";
 import { ExcelUpload } from "@/components/ExcelUpload";
 import {
   listDbServices, createDbService, deleteDbService,
-  listDbInstances, deleteDbInstance, exportDbJson,
+  listDbInstances, deleteDbInstance, exportDbJson, exportCombinedJson,
 } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -102,6 +102,15 @@ export default function DbConfig() {
     }
   };
 
+  const doExportCombined = async () => {
+    try {
+      await exportCombinedJson();
+      toast.success("Exported combined JSON (DB + Kubernetes + Workloads)");
+    } catch (e) {
+      toast.error("Combined export failed");
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -109,6 +118,10 @@ export default function DbConfig() {
         subtitle="Database services, instances & metadata"
         actions={
           <>
+            <Button data-testid="db-export-combined" variant="outline" onClick={doExportCombined}
+              className="border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm gap-2">
+              <Layers className="h-4 w-4" /> Combined JSON
+            </Button>
             <Button data-testid="db-export-json" variant="outline" onClick={doExport}
               className="border-white/20 bg-transparent text-white hover:bg-white/10 rounded-sm gap-2">
               <FileJson className="h-4 w-4" /> Export JSON
@@ -234,7 +247,8 @@ export default function DbConfig() {
       </div>
 
       <DbInstanceForm open={formOpen} onOpenChange={setFormOpen} instance={editing} services={services}
-        defaultServiceId={activeService} onSaved={() => { loadInstances(); loadServices(); }} />
+        defaultServiceId={activeService} onSaved={() => { loadInstances(); loadServices(); }}
+        onServicesChanged={loadServices} />
       <ExcelUpload open={excelOpen} onOpenChange={setExcelOpen} onImported={() => { loadInstances(); loadServices(); }} />
 
       <AlertDialog open={!!toDelete} onOpenChange={(o) => !o && setToDelete(null)}>
